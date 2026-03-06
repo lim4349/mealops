@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Lunch voting bot for MS Teams",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=25.0.0"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",

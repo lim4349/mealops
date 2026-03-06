@@ -85,9 +85,9 @@ export class FavoriteServiceImpl implements FavoriteService {
 
     return {
       user_name: user.name,
-      most_visited: mostVisited.length > 0 ? mostVisited : [{ name: '데이터 없음', count: 0 }],
-      highest_rated: highestRated.length > 0 ? highestRated : [{ name: '데이터 없음', rating: 0 }],
-      recent_visits: recentVisits.length > 0 ? recentVisits : [{ name: '데이터 없음', date: '-' }],
+      most_visited: mostVisited,
+      highest_rated: highestRated,
+      recent_visits: recentVisits,
     };
   }
 }

@@ -44,8 +44,9 @@ export class SqliteDatabase {
       -- Votes
       CREATE TABLE IF NOT EXISTS votes (
         user_id TEXT NOT NULL,
-        restaurant_id INTEGER NOT NULL,
+        restaurant_id INTEGER,
         vote_date TEXT NOT NULL,
+        is_solo INTEGER DEFAULT 0,
         PRIMARY KEY (user_id, vote_date),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
@@ -98,6 +99,13 @@ export class SqliteDatabase {
       INSERT OR IGNORE INTO settings (key, value) VALUES ('force_decision_enabled', 'true');
       INSERT OR IGNORE INTO settings (key, value) VALUES ('force_decision_minute', '30');
     `);
+
+    // Migration: Add is_solo column to votes table if it doesn't exist
+    try {
+      this.db.exec('ALTER TABLE votes ADD COLUMN is_solo INTEGER DEFAULT 0');
+    } catch {
+      // Column already exists, ignore error
+    }
   }
 
   get<T>(query: string, params: unknown[] = []): T | undefined {

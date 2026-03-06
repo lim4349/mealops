@@ -33,20 +33,27 @@ export class OllamaServiceImpl implements OllamaService {
   }
 
   private buildPrompt(context: RecommendationContext): string {
+    const restaurantList = context.availableRestaurants
+      .map(r => `- ${r.name} (${r.category}, ₩${r.price})`)
+      .join('\n');
+
     return `오늘 강남역 날씨는 ${context.weather.temp}도, ${context.weather.description}입니다.
 
-최근 먹었던 식당: ${context.recentVisits.join(', ') || '없음'}
-평점이 높은 식당: ${context.topRated.join(', ') || '없음'}
-블랙리스트: ${context.blacklisted.join(', ') || '없음'}
+반드시 아래 식당 목록 중에서만 선택하세요:
+${restaurantList}
+
+최근 먹었던 식당 (제외): ${context.recentVisits.join(', ') || '없음'}
+평점이 높은 식당 (우선 추천): ${context.topRated.join(', ') || '없음'}
+블랙리스트 (제외): ${context.blacklisted.join(', ') || '없음'}
 예산: 1인 ${context.budget}원
 
-다음 조건으로 점심 메뉴 5개를 추천해주세요:
-1. 블랙리스트에 있는 식당 제외
-2. 최근 3일 이내에 먹었던 식당 제외
-3. 날씨 고려 (추우면 따뜻한 한식/찌개류, 더우면 시원한 국수/돈까스)
-4. 평점과 다양성 고려
+조건:
+1. 위 식당 목록에 있는 식당만 추천 (목록에 없는 식당 절대 추천 금지)
+2. 블랙리스트, 최근 먹은 식당 제외
+3. 날씨 고려 (추우면 따뜻한 한식, 더우면 시원한 음식)
+4. 예산 내 식당 우선
 
-반드시 JSON 배열 형식으로만 답변해주세요. 다른 말은 하지 말고 JSON만:
+반드시 JSON 배열 형식으로만 답변하세요. 다른 말은 하지 말고 JSON만:
 [
   {"name": "식당이름", "reason": "추천 이유 (짧게)"},
   ...

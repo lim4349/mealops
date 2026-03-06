@@ -78,6 +78,8 @@ export class CommandHandler {
       'settings': 'settings',
       '공휴일': 'holiday',
       'holiday': 'holiday',
+      '배달': 'delivery',
+      'delivery': 'delivery',
     };
 
     return commandMap[cmd] ?? 'help';
@@ -128,6 +130,9 @@ export class CommandHandler {
       case 'holiday':
         return this.handleHoliday(command.args);
 
+      case 'delivery':
+        return this.handleDelivery();
+
       default:
         return { success: false, message: '알 수 없는 명령어입니다. `/도움`을 입력해보세요.' };
     }
@@ -169,15 +174,30 @@ export class CommandHandler {
     const [name, category, distanceStr, priceStr] = args;
     const categories: RestaurantCategory[] = ['한식', '일식', '중식', '양식', '분식', '기타'];
 
+    if (/\s/.test(name)) {
+      return { success: false, message: '식당 이름은 띄어쓰기 없이 입력해주세요. 예: /추가 국수나무 한식 300 10000' };
+    }
+
     if (!categories.includes(category as RestaurantCategory)) {
       return { success: false, message: `카테고리: ${categories.join(', ')}` };
+    }
+
+    const distance = parseInt(distanceStr, 10);
+    const price = parseInt(priceStr, 10);
+
+    if (isNaN(distance) || distance < 0) {
+      return { success: false, message: '거리는 0 이상의 숫자여야 합니다.' };
+    }
+
+    if (isNaN(price) || price < 0) {
+      return { success: false, message: '가격은 0 이상의 숫자여야 합니다.' };
     }
 
     const dto: CreateRestaurantDto = {
       name,
       category: category as RestaurantCategory,
-      distance: parseInt(distanceStr, 10),
-      price: parseInt(priceStr, 10),
+      distance,
+      price,
     };
 
     try {
@@ -193,7 +213,7 @@ export class CommandHandler {
       return { success: false, message: '사용법: /삭제 [식당이름]' };
     }
 
-    const name = args[0];
+    const name = args.join(' ');
     const restaurant = this.restaurantRepo.findByName(name);
 
     if (!restaurant) {
@@ -250,7 +270,7 @@ export class CommandHandler {
       };
     }
 
-    const name = args[0];
+    const name = args.join(' ');
     const restaurant = this.restaurantRepo.findByName(name);
 
     if (!restaurant) {
@@ -303,21 +323,32 @@ export class CommandHandler {
       }
 
       let message = `**🏆 ${stats.user_name}님의 최애 식당**\n\n`;
-      message += `**📊 자주 가는 식당**\n`;
-      stats.most_visited.forEach(v => {
-        message += `• ${v.name} (${v.count}회)\n`;
-      });
 
-      message += `\n**⭐ 높은 평점**\n`;
-      stats.highest_rated.forEach(v => {
-        message += `• ${v.name} (${v.rating}점)\n`;
-      });
+      if (stats.most_visited.length > 0) {
+        message += `**📊 자주 가는 식당**\n`;
+        stats.most_visited.forEach(v => {
+          message += `• ${v.name} (${v.count}회)\n`;
+        });
+        message += '\n';
+      }
+
+      if (stats.highest_rated.length > 0) {
+        message += `**⭐ 높은 평점**\n`;
+        stats.highest_rated.forEach(v => {
+          message += `• ${v.name} (${v.rating}점)\n`;
+        });
+        message += '\n';
+      }
 
       if (stats.recent_visits.length > 0) {
-        message += `\n**🕐 최근 방문**\n`;
+        message += `**🕐 최근 방문**\n`;
         stats.recent_visits.forEach(v => {
           message += `• ${v.name} (${v.date})\n`;
         });
+      }
+
+      if (stats.most_visited.length === 0 && stats.highest_rated.length === 0 && stats.recent_visits.length === 0) {
+        message += '아직 데이터가 없습니다. 투표하고 리뷰를 남겨보세요!';
       }
 
       return { success: true, message };
@@ -348,9 +379,15 @@ export class CommandHandler {
       return { success: false, message: '사용법: /리뷰 [식당이름] [1-5점] [코멘트]\n예: /리뷰 본죽 5 따뜻해서 좋았어요' };
     }
 
-    const restaurantName = args[0];
-    const rating = parseInt(args[1], 10);
-    const comment = args.slice(2).join(' ');
+    // 첫 번째 순수 숫자 arg의 위치로 이름/점수 구분
+    const ratingIndex = args.findIndex((a, i) => i >= 1 && /^\d+$/.test(a));
+    if (ratingIndex === -1) {
+      return { success: false, message: '사용법: /리뷰 [식당이름] [1-5점] [코멘트]\n예: /리뷰 본죽 강남점 5 따뜻해서 좋았어요' };
+    }
+
+    const restaurantName = args.slice(0, ratingIndex).join(' ');
+    const rating = parseInt(args[ratingIndex], 10);
+    const comment = args.slice(ratingIndex + 1).join(' ');
 
     if (isNaN(rating) || rating < 1 || rating > 5) {
       return { success: false, message: '평점은 1~5 사이 숫자여야 합니다.' };
@@ -416,5 +453,10 @@ export class CommandHandler {
   private handleHoliday(args: string[]): ServiceResponse {
     // Placeholder for holiday management
     return { success: false, message: '공휴일 관리는 아직 구현 중입니다.' };
+  }
+
+  private handleDelivery(): ServiceResponse {
+    // Delivery mode trigger - actual card display handled by bot
+    return { success: true, message: '배달 투표를 시작합니다!' };
   }
 }

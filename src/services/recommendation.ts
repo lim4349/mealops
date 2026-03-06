@@ -50,6 +50,12 @@ export class RecommendationServiceImpl implements RecommendationService {
 
     const budget = this.settingRepo.getBudget();
 
+    // Build available list (excluding blacklisted and recent)
+    const availableRestaurants = allRestaurants.filter(r =>
+      !blacklistedNames.includes(r.name) && !recentVisits.includes(r.name)
+    );
+    const availableNames = new Set(availableRestaurants.map(r => r.name));
+
     try {
       const recommendations = await this.ollamaService.recommend({
         weather,
@@ -57,12 +63,15 @@ export class RecommendationServiceImpl implements RecommendationService {
         topRated,
         blacklisted: blacklistedNames,
         budget,
+        availableRestaurants: availableRestaurants.map(r => ({
+          name: r.name,
+          category: r.category,
+          price: r.price,
+        })),
       });
 
-      // Filter out blacklisted and recently visited from results
-      const validRecommendations = recommendations.filter(r =>
-        !blacklistedNames.includes(r.name) && !recentVisits.includes(r.name)
-      );
+      // DB에 존재하는 식당만 필터링
+      const validRecommendations = recommendations.filter(r => availableNames.has(r.name));
 
       // If no valid recommendations, return fallback
       if (validRecommendations.length === 0) {

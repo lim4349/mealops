@@ -77,31 +77,53 @@ export class RestaurantRepositoryImpl implements RestaurantRepository {
 export class VoteRepositoryImpl implements VoteRepository {
   constructor(private db: SqliteDatabase) {}
 
-  vote(userId: string, restaurantId: number, date: string): void {
+  vote(userId: string, restaurantId: number | null, date: string, isSolo = false): void {
     this.db.run(
-      'INSERT OR REPLACE INTO votes (user_id, restaurant_id, vote_date) VALUES (?, ?, ?)',
-      [userId, restaurantId, date]
+      'INSERT OR REPLACE INTO votes (user_id, restaurant_id, vote_date, is_solo) VALUES (?, ?, ?, ?)',
+      [userId, restaurantId, date, isSolo ? 1 : 0]
     );
   }
 
   findTodayVotes(date: string): Vote[] {
-    return this.db.all<Vote>(
+    const rows = this.db.all<any>(
       'SELECT * FROM votes WHERE vote_date = ?',
       [date]
     );
+    return rows.map(v => ({
+      user_id: v.user_id,
+      restaurant_id: v.restaurant_id,
+      vote_date: v.vote_date,
+      is_solo: !!v.is_solo,
+    }));
   }
 
   findUserVote(userId: string, date: string): Vote | undefined {
-    return this.db.get<Vote>(
+    const result = this.db.get<any>(
       'SELECT * FROM votes WHERE user_id = ? AND vote_date = ?',
       [userId, date]
     );
+    return result
+      ? {
+          user_id: result.user_id,
+          restaurant_id: result.restaurant_id,
+          vote_date: result.vote_date,
+          is_solo: !!result.is_solo,
+        }
+      : undefined;
   }
 
   countByRestaurant(restaurantId: number, date: string): number {
     const result = this.db.get<{ count: number }>(
-      'SELECT COUNT(*) as count FROM votes WHERE restaurant_id = ? AND vote_date = ?',
+      'SELECT COUNT(*) as count FROM votes WHERE restaurant_id = ? AND vote_date = ? AND is_solo = 0',
       [restaurantId, date]
+    );
+    return result?.count ?? 0;
+  }
+
+  getSoloCount(date: string): number {
+    const result = this.db.get<{ count: number }>(
+      'SELECT COUNT(*) as count FROM votes WHERE vote_date = ? AND is_solo = 1',
+      [date]
     );
     return result?.count ?? 0;
   }
@@ -111,7 +133,7 @@ export class VoteRepositoryImpl implements VoteRepository {
       SELECT r.id as restaurant_id, r.name as restaurant_name, COUNT(v.user_id) as count
       FROM votes v
       JOIN restaurants r ON v.restaurant_id = r.id
-      WHERE v.vote_date = ?
+      WHERE v.vote_date = ? AND v.is_solo = 0
       GROUP BY r.id, r.name
       ORDER BY count DESC
     `, [date]);
@@ -144,8 +166,8 @@ export class BlacklistRepositoryImpl implements BlacklistRepository {
   }
 
   isBlacklisted(userId: string, restaurantId: number): boolean {
-    const result = this.db.get<{ exists: number }>(
-      'SELECT 1 as exists FROM blacklist WHERE user_id = ? AND restaurant_id = ?',
+    const result = this.db.get<{ found: number }>(
+      'SELECT 1 as found FROM blacklist WHERE user_id = ? AND restaurant_id = ?',
       [userId, restaurantId]
     );
     return !!result;
@@ -289,5 +311,13 @@ export class SettingRepositoryImpl implements SettingRepository {
 
   setForceDecisionEnabled(enabled: boolean): void {
     this.set('force_decision_enabled', enabled ? 'true' : 'false');
+  }
+
+  getVoteTriggeredDate(): string {
+    return this.get('vote_triggered_date') ?? '';
+  }
+
+  setVoteTriggeredDate(date: string): void {
+    this.set('vote_triggered_date', date);
   }
 }

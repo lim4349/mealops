@@ -40,8 +40,18 @@ export class VoteServiceImpl implements VoteService {
       return { success: false, message: `'${restaurantName}'은(는) 블랙리스트에 있습니다.` };
     }
 
-    // Cast vote
-    this.voteRepo.vote(userId, restaurant.id, date);
+    // Cast vote (기존 투표가 있으면 변경)
+    const existingVote = this.voteRepo.findUserVote(userId, date);
+    this.voteRepo.vote(userId, restaurant.id, date, false);
+
+    if (existingVote && existingVote.restaurant_id !== restaurant.id) {
+      const prev = this.restaurantRepo.findById(existingVote.restaurant_id!);
+      return {
+        success: true,
+        message: `${userName}님의 투표가 '${prev?.name ?? '이전 식당'}'에서 '${restaurantName}'(으)로 변경되었습니다! 🔄`,
+        data: { restaurant: restaurant.name, category: restaurant.category },
+      };
+    }
 
     return {
       success: true,
@@ -50,8 +60,25 @@ export class VoteServiceImpl implements VoteService {
     };
   }
 
+  async voteSolo(userId: string, userName: string, date: string): Promise<ServiceResponse> {
+    // Find or create user
+    this.userRepo.findOrCreate(userId, userName);
+
+    // Register as solo (혼밥)
+    this.voteRepo.vote(userId, null, date, true);
+
+    return {
+      success: true,
+      message: `${userName}님이 오늘 혼밥으로 등록되었습니다! 🍱`,
+    };
+  }
+
   getResults(date: string): import('../core/types.js').VoteResult[] {
     return this.voteRepo.getResults(date);
+  }
+
+  getSoloCount(date: string): number {
+    return this.voteRepo.getSoloCount(date);
   }
 
   decideWinner(date: string): ServiceResponse<{ restaurant: string; reason: string }> {

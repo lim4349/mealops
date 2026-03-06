@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
-import { MeaLOpsBot } from './bot/index.js';
+import { BotFrameworkAdapter, MessageFactory } from 'botbuilder';
+import { CommandHandler } from './handlers/command.js';
 import { getDatabase } from './db/index.js';
 import {
   RestaurantRepositoryImpl,
@@ -17,6 +18,7 @@ import { VoteServiceImpl } from './services/vote.js';
 import { RecommendationServiceImpl } from './services/recommendation.js';
 import { FavoriteServiceImpl } from './services/favorite.js';
 import { SchedulerImpl } from './scheduler/index.js';
+import { MeaLOpsBot, conversationReferences } from './bot/index.js';
 import type { Dependencies } from './core/types.js';
 
 // Initialize database
@@ -67,10 +69,29 @@ const favoriteService = new FavoriteServiceImpl(
   restaurantRepo
 );
 
-// Notification function (to be connected to Teams)
-async function sendNotification(message: string): Promise<void> {
-  // TODO: Send to Teams channel
-  console.log('Notification:', message);
+// Bot Framework adapter
+const adapter = new BotFrameworkAdapter({
+  appId: process.env.MICROSOFT_APP_ID ?? '',
+  appPassword: process.env.MICROSOFT_APP_PASSWORD ?? '',
+});
+
+// Error handler
+adapter.onTurnError = async (context, error) => {
+  console.error('Bot error:', error);
+  await context.sendActivity('오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+};
+
+// Notification function - send to all conversation references
+async function sendNotification(message: string, card?: any): Promise<void> {
+  for (const [, reference] of conversationReferences) {
+    try {
+      await adapter.continueConversation(reference, async (context) => {
+        await context.sendActivity(card ? MessageFactory.attachment(card) : message);
+      });
+    } catch (error) {
+      console.error('Error sending notification:', error);
+    }
+  }
 }
 
 // Initialize scheduler
@@ -82,6 +103,18 @@ const scheduler = new SchedulerImpl(
   settingRepo,
   restaurantRepo,
   sendNotification
+);
+
+const commandHandler = new CommandHandler(
+  restaurantRepo,
+  voteService,
+  recommendationService,
+  favoriteService,
+  blacklistRepo,
+  userRepo,
+  reviewRepo,
+  settingRepo,
+  historyRepo
 );
 
 // Create dependencies container
@@ -102,6 +135,9 @@ const dependencies: Dependencies = {
   scheduler,
 };
 
+// Create bot instance
+const bot = new MeaLOpsBot(dependencies);
+
 // Express server for Bot Framework
 const app = express();
 app.use(express.json());
@@ -115,8 +151,27 @@ app.get('/health', (req, res) => {
 
 // Bot Framework endpoint
 app.post('/api/messages', (req, res) => {
-  // Bot Framework adapter will handle this
-  res.send(200);
+  adapter.processActivity(req, res, async (context) => {
+    // Handle Adaptive Card actions
+    if (context.activity.type === 'invoke' && context.activity.name === 'adaptiveCard/action') {
+      const response = await (bot as any).handleCardAction(context, context.activity.value);
+      res.json(response);
+      return;
+    }
+    await bot.run(context);
+  });
+});
+
+// Test endpoint
+app.post('/test', async (req, res) => {
+  const { text, userId = 'test-user', userName = '테스트유저' } = req.body;
+  if (!text) {
+    res.status(400).json({ error: 'text 필드가 필요합니다' });
+    return;
+  }
+  const parsed = commandHandler.parseCommand(text);
+  const result = await commandHandler.handle(parsed, userId, userName);
+  res.json(result);
 });
 
 // Start server

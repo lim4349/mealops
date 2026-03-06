@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { Attachment } from 'botbuilder';
 import type {
   Scheduler,
   VoteService,
@@ -8,6 +9,7 @@ import type {
   SettingRepository,
   RestaurantRepository,
 } from '../core/types.js';
+import { buildVoteCard, buildReviewCard } from '../cards/index.js';
 
 // Define ScheduledTask type locally
 interface ScheduledTask {
@@ -27,7 +29,7 @@ export class SchedulerImpl implements Scheduler {
     private historyRepo: SelectedHistoryRepository,
     private settingRepo: SettingRepository,
     private restaurantRepo: RestaurantRepository,
-    private sendNotification: (message: string) => Promise<void>
+    private sendNotification: (message: string, card?: Attachment) => Promise<void>
   ) {}
 
   start(): void {
@@ -95,17 +97,25 @@ export class SchedulerImpl implements Scheduler {
 
   private async sendVoteReminder(): Promise<void> {
     const today = this.formatDate(new Date());
-    const message = `🍽️ **점심 투표 시간!**
 
-오늘( ${today} ) 점심 메뉴를 투표해주세요!
+    // Check delivery mode - skip if already triggered today
+    const triggeredDate = this.settingRepo.getVoteTriggeredDate();
+    if (triggeredDate === today) {
+      console.log('투표 카드 이미 전송됨 (배달모드), 스킵');
+      return;
+    }
 
-\`/추천\` - AI 추천 받기
-\`/목록\` - 식당 목록 보기
-\`/투표 [식당이름]\` - 투표하기
+    // Send vote card
+    const restaurants = this.restaurantRepo.findAll();
+    const voteResults = this.voteService.getResults(today);
+    const soloCount = this.voteService.getSoloCount(today);
+    const voteCard = buildVoteCard(restaurants, voteResults, soloCount);
+
+    const message = `🍽️ **점침 투표 시간!**
 
 ${this.settingRepo.getForceDecisionEnabled() ? `⏰ ${process.env.VOTE_HOUR}:${process.env.FORCE_DECISION_MINUTE}에 투표 마감됩니다!` : ''}`;
 
-    await this.sendNotification(message);
+    await this.sendNotification(message, voteCard as any);
   }
 
   private async makeForceDecision(): Promise<void> {
@@ -131,15 +141,23 @@ ${result.message}
 
   private async sendReviewReminder(): Promise<void> {
     const today = this.formatDate(new Date());
-    const message = `⭐ **식사 리뷰 시간!**
 
-오늘 점심 맛은 어땠나요?
+    // Get the selected restaurant for today
+    const selected = this.historyRepo.findByDate(today);
+    if (!selected) {
+      console.log('오늘 선택된 식당이 없어서 리뷰 알림 스킵');
+      return;
+    }
 
-\`/리뷰 [식당이름] [1-5점] [코멘트]\`
+    const restaurant = this.restaurantRepo.findById(selected.restaurant_id);
+    if (!restaurant) {
+      return;
+    }
 
-예시: \`/리뷰 본죽 5 따뜻해서 좋았어요\``;
+    const reviewCard = buildReviewCard(restaurant.name);
+    const message = `⭐ **식사 리뷰 시간!**`;
 
-    await this.sendNotification(message);
+    await this.sendNotification(message, reviewCard as any);
   }
 
   private formatDate(date: Date): string {

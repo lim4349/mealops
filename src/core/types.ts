@@ -18,8 +18,9 @@ export interface User {
 
 export interface Vote {
   user_id: string;
-  restaurant_id: number;
+  restaurant_id: number | null;
   vote_date: string; // YYYY-MM-DD
+  is_solo: boolean;
 }
 
 export interface Blacklist {
@@ -97,7 +98,8 @@ export type Command =
   | 'dashboard'
   | 'review'
   | 'settings'
-  | 'holiday';
+  | 'holiday'
+  | 'delivery';
 
 export interface ParsedCommand {
   command: Command;
@@ -157,11 +159,12 @@ export interface RestaurantRepository {
 }
 
 export interface VoteRepository {
-  vote(userId: string, restaurantId: number, date: string): void;
+  vote(userId: string, restaurantId: number | null, date: string, isSolo?: boolean): void;
   findTodayVotes(date: string): Vote[];
   findUserVote(userId: string, date: string): Vote | undefined;
   countByRestaurant(restaurantId: number, date: string): number;
   getResults(date: string): VoteResult[];
+  getSoloCount(date: string): number;
 }
 
 export interface BlacklistRepository {
@@ -199,6 +202,8 @@ export interface SettingRepository {
   setBudget(amount: number): void;
   getForceDecisionEnabled(): boolean;
   setForceDecisionEnabled(enabled: boolean): void;
+  getVoteTriggeredDate(): string;
+  setVoteTriggeredDate(date: string): void;
 }
 
 // Service Interfaces
@@ -212,6 +217,7 @@ export interface RecommendationContext {
   topRated: string[];
   blacklisted: string[];
   budget: number;
+  availableRestaurants: { name: string; category: string; price: number }[];
 }
 
 export interface WeatherService {
@@ -224,7 +230,9 @@ export interface RecommendationService {
 
 export interface VoteService {
   vote(userId: string, userName: string, restaurantName: string, date: string): Promise<ServiceResponse>;
+  voteSolo(userId: string, userName: string, date: string): Promise<ServiceResponse>;
   getResults(date: string): VoteResult[];
+  getSoloCount(date: string): number;
   decideWinner(date: string): ServiceResponse<{ restaurant: string; reason: string }>;
 }
 
@@ -237,4 +245,11 @@ export interface Scheduler {
   start(): void;
   stop(): void;
   isHoliday(date: Date): boolean;
+}
+
+// Adaptive Card Response
+export interface AdaptiveCardInvokeResponse {
+  statusCode: number;
+  type?: string;
+  value?: any;
 }
