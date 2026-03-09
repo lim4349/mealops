@@ -15,6 +15,7 @@ import type {
   CreateRestaurantDto,
   RestaurantCategory,
   VoteResult,
+  VoterEntry,
 } from '../core/types.js';
 import type { SqliteDatabase } from '../db/index.js';
 
@@ -23,8 +24,8 @@ export class RestaurantRepositoryImpl implements RestaurantRepository {
 
   create(dto: CreateRestaurantDto): Restaurant {
     this.db.run(
-      'INSERT INTO restaurants (name, category, distance, price) VALUES (?, ?, ?, ?)',
-      [dto.name, dto.category, dto.distance, dto.price]
+      'INSERT INTO restaurants (name, alias, category, distance, price, is_delivery) VALUES (?, ?, ?, ?, ?, ?)',
+      [dto.name, dto.alias ?? null, dto.category, dto.distance, dto.price, dto.is_delivery ? 1 : 0]
     );
     const created = this.findByName(dto.name);
     if (!created) throw new Error('Failed to create restaurant');
@@ -72,16 +73,39 @@ export class RestaurantRepositoryImpl implements RestaurantRepository {
     this.db.run('UPDATE restaurants SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, id]);
     return true;
   }
+
+  update(id: number, dto: Partial<CreateRestaurantDto>): void {
+    const fields: string[] = [];
+    const params: unknown[] = [];
+    if (dto.name !== undefined) { fields.push('name = ?'); params.push(dto.name); }
+    if (dto.alias !== undefined) { fields.push('alias = ?'); params.push(dto.alias || null); }
+    if (dto.category !== undefined) { fields.push('category = ?'); params.push(dto.category); }
+    if (dto.distance !== undefined) { fields.push('distance = ?'); params.push(Number(dto.distance)); }
+    if (dto.price !== undefined) { fields.push('price = ?'); params.push(Number(dto.price)); }
+    if (dto.is_delivery !== undefined) { fields.push('is_delivery = ?'); params.push(dto.is_delivery ? 1 : 0); }
+    if (fields.length === 0) return;
+    params.push(id);
+    this.db.run(`UPDATE restaurants SET ${fields.join(', ')} WHERE id = ?`, params);
+  }
 }
 
 export class VoteRepositoryImpl implements VoteRepository {
   constructor(private db: SqliteDatabase) {}
 
-  vote(userId: string, restaurantId: number | null, date: string, isSolo = false): void {
-    this.db.run(
-      'INSERT OR REPLACE INTO votes (user_id, restaurant_id, vote_date, is_solo) VALUES (?, ?, ?, ?)',
-      [userId, restaurantId, date, isSolo ? 1 : 0]
-    );
+  vote(userId: string, restaurantId: number | null, date: string, isSolo = false, isAny = false): void {
+    if (isSolo || isAny) {
+      // Solo or Any vote - single vote per user per date
+      this.db.run(
+        'INSERT OR REPLACE INTO votes (user_id, restaurant_id, vote_date, is_solo, is_any) VALUES (?, NULL, ?, ?, ?)',
+        [userId, date, isSolo ? 1 : 0, isAny ? 1 : 0]
+      );
+    } else {
+      // Restaurant vote - allow multiple votes
+      this.db.run(
+        'INSERT OR IGNORE INTO votes (user_id, restaurant_id, vote_date, is_solo, is_any) VALUES (?, ?, ?, 0, 0)',
+        [userId, restaurantId, date]
+      );
+    }
   }
 
   findTodayVotes(date: string): Vote[] {
@@ -94,12 +118,13 @@ export class VoteRepositoryImpl implements VoteRepository {
       restaurant_id: v.restaurant_id,
       vote_date: v.vote_date,
       is_solo: !!v.is_solo,
+      is_any: !!v.is_any,
     }));
   }
 
   findUserVote(userId: string, date: string): Vote | undefined {
     const result = this.db.get<any>(
-      'SELECT * FROM votes WHERE user_id = ? AND vote_date = ?',
+      'SELECT * FROM votes WHERE user_id = ? AND vote_date = ? AND (is_solo = 1 OR is_any = 1)',
       [userId, date]
     );
     return result
@@ -108,14 +133,37 @@ export class VoteRepositoryImpl implements VoteRepository {
           restaurant_id: result.restaurant_id,
           vote_date: result.vote_date,
           is_solo: !!result.is_solo,
+          is_any: !!result.is_any,
         }
       : undefined;
   }
 
+  findUserVotes(userId: string, date: string): Vote[] {
+    const rows = this.db.all<any>(
+      'SELECT * FROM votes WHERE user_id = ? AND vote_date = ?',
+      [userId, date]
+    );
+    return rows.map(v => ({
+      user_id: v.user_id,
+      restaurant_id: v.restaurant_id,
+      vote_date: v.vote_date,
+      is_solo: !!v.is_solo,
+      is_any: !!v.is_any,
+    }));
+  }
+
   countByRestaurant(restaurantId: number, date: string): number {
     const result = this.db.get<{ count: number }>(
-      'SELECT COUNT(*) as count FROM votes WHERE restaurant_id = ? AND vote_date = ? AND is_solo = 0',
+      'SELECT COUNT(*) as count FROM votes WHERE restaurant_id = ? AND vote_date = ? AND is_solo = 0 AND is_any = 0',
       [restaurantId, date]
+    );
+    return result?.count ?? 0;
+  }
+
+  countUniqueVoters(date: string): number {
+    const result = this.db.get<{ count: number }>(
+      'SELECT COUNT(DISTINCT user_id) as count FROM votes WHERE vote_date = ?',
+      [date]
     );
     return result?.count ?? 0;
   }
@@ -128,15 +176,110 @@ export class VoteRepositoryImpl implements VoteRepository {
     return result?.count ?? 0;
   }
 
+  getAnyCount(date: string): number {
+    const result = this.db.get<{ count: number }>(
+      'SELECT COUNT(*) as count FROM votes WHERE vote_date = ? AND is_any = 1',
+      [date]
+    );
+    return result?.count ?? 0;
+  }
+
   getResults(date: string): VoteResult[] {
     return this.db.all<VoteResult>(`
-      SELECT r.id as restaurant_id, r.name as restaurant_name, COUNT(v.user_id) as count
+      SELECT r.id as restaurant_id, r.name as restaurant_name, COUNT(DISTINCT v.user_id) as count
       FROM votes v
       JOIN restaurants r ON v.restaurant_id = r.id
-      WHERE v.vote_date = ? AND v.is_solo = 0
+      WHERE v.vote_date = ? AND v.is_solo = 0 AND v.is_any = 0
       GROUP BY r.id, r.name
       ORDER BY count DESC
     `, [date]);
+  }
+
+  cancelVote(userId: string, restaurantId: number, date: string): boolean {
+    this.db.run(
+      'DELETE FROM votes WHERE user_id = ? AND restaurant_id = ? AND vote_date = ?',
+      [userId, restaurantId, date]
+    );
+    return true;
+  }
+
+  findVotersByRestaurant(date: string): Map<number, VoterEntry[]> {
+    const rows = this.db.all<any>(`
+      SELECT DISTINCT v.restaurant_id, u.id, u.name
+      FROM votes v
+      JOIN users u ON v.user_id = u.id
+      WHERE v.vote_date = ? AND v.is_solo = 0 AND v.is_any = 0
+      ORDER BY v.restaurant_id, u.name
+    `, [date]);
+
+    const map = new Map<number, import('../core/types.js').VoterEntry[]>();
+    for (const row of rows) {
+      if (!map.has(row.restaurant_id)) {
+        map.set(row.restaurant_id, []);
+      }
+      map.get(row.restaurant_id)!.push({ user_id: row.id, user_name: row.name });
+    }
+    return map;
+  }
+
+  findSoloVoters(date: string): VoterEntry[] {
+    return this.db.all<any>(`
+      SELECT DISTINCT u.id, u.name
+      FROM votes v
+      JOIN users u ON v.user_id = u.id
+      WHERE v.vote_date = ? AND v.is_solo = 1
+      ORDER BY u.name
+    `, [date]).map(row => ({ user_id: row.id, user_name: row.name }));
+  }
+
+  cancelSoloVote(userId: string, date: string): boolean {
+    this.db.run(
+      'DELETE FROM votes WHERE user_id = ? AND vote_date = ? AND is_solo = 1',
+      [userId, date]
+    );
+    return true;
+  }
+
+  cancelAllVotes(userId: string, date: string): boolean {
+    this.db.run(
+      'DELETE FROM votes WHERE user_id = ? AND vote_date = ? AND is_solo = 0 AND is_any = 0',
+      [userId, date]
+    );
+    return true;
+  }
+
+  findUserAnyVote(userId: string, date: string): Vote | undefined {
+    const result = this.db.get<any>(
+      'SELECT * FROM votes WHERE user_id = ? AND vote_date = ? AND is_any = 1',
+      [userId, date]
+    );
+    return result
+      ? {
+          user_id: result.user_id,
+          restaurant_id: result.restaurant_id,
+          vote_date: result.vote_date,
+          is_solo: !!result.is_solo,
+          is_any: !!result.is_any,
+        }
+      : undefined;
+  }
+
+  cancelAnyVote(userId: string, date: string): boolean {
+    this.db.run(
+      'DELETE FROM votes WHERE user_id = ? AND vote_date = ? AND is_any = 1',
+      [userId, date]
+    );
+    return true;
+  }
+
+  findAnyVoters(date: string): VoterEntry[] {
+    return this.db.all<any>(`
+      SELECT DISTINCT u.id, u.name
+      FROM votes v
+      JOIN users u ON v.user_id = u.id
+      WHERE v.vote_date = ? AND v.is_any = 1
+      ORDER BY u.name
+    `, [date]).map(row => ({ user_id: row.id, user_name: row.name }));
   }
 }
 
@@ -221,10 +364,10 @@ export class ReviewRepositoryImpl implements ReviewRepository {
 export class SelectedHistoryRepositoryImpl implements SelectedHistoryRepository {
   constructor(private db: SqliteDatabase) {}
 
-  add(restaurantId: number, date: string, voteCount: number): void {
+  add(restaurantId: number, date: string, voteCount: number, weatherTemp?: number, weatherCondition?: string): void {
     this.db.run(
-      'INSERT INTO selected_history (restaurant_id, selected_date, vote_count) VALUES (?, ?, ?)',
-      [restaurantId, date, voteCount]
+      'INSERT INTO selected_history (restaurant_id, selected_date, vote_count, weather_temp, weather_condition) VALUES (?, ?, ?, ?, ?)',
+      [restaurantId, date, voteCount, weatherTemp ?? null, weatherCondition ?? null]
     );
   }
 
@@ -251,6 +394,19 @@ export class SelectedHistoryRepositoryImpl implements SelectedHistoryRepository 
     `, [restaurantId]);
     return results.map(r => r.selected_date);
   }
+
+  findByWeather(condition: string, tempMin?: number, tempMax?: number): SelectedHistory[] {
+    if (tempMin !== undefined && tempMax !== undefined) {
+      return this.db.all<SelectedHistory>(
+        'SELECT * FROM selected_history WHERE weather_condition = ? AND weather_temp >= ? AND weather_temp <= ? ORDER BY selected_date DESC',
+        [condition, tempMin, tempMax]
+      );
+    }
+    return this.db.all<SelectedHistory>(
+      'SELECT * FROM selected_history WHERE weather_condition = ? ORDER BY selected_date DESC',
+      [condition]
+    );
+  }
 }
 
 export class UserRepositoryImpl implements UserRepository {
@@ -258,12 +414,15 @@ export class UserRepositoryImpl implements UserRepository {
 
   findOrCreate(userId: string, name: string): User {
     const existing = this.findById(userId);
-    if (existing) return existing;
-
-    this.db.run(
-      'INSERT INTO users (id, name) VALUES (?, ?)',
-      [userId, name]
-    );
+    if (existing) {
+      // Upsert: update name if a real name is provided and differs
+      if (name && name !== '익명' && existing.name !== name) {
+        this.db.run('UPDATE users SET name = ? WHERE id = ?', [name, userId]);
+        return { ...existing, name };
+      }
+      return existing;
+    }
+    this.db.run('INSERT INTO users (id, name) VALUES (?, ?)', [userId, name]);
     return { id: userId, name };
   }
 
@@ -319,5 +478,13 @@ export class SettingRepositoryImpl implements SettingRepository {
 
   setVoteTriggeredDate(date: string): void {
     this.set('vote_triggered_date', date);
+  }
+
+  getDeliveryModeActive(): boolean {
+    return this.get('delivery_mode_active') === 'true';
+  }
+
+  setDeliveryModeActive(active: boolean): void {
+    this.set('delivery_mode_active', active ? 'true' : 'false');
   }
 }

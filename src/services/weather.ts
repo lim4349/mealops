@@ -21,15 +21,26 @@ export class WeatherServiceImpl implements WeatherService {
       );
 
       const weather = response.data.weather[0];
+      const normalized = this.normalizeWeather(weather.main.toLowerCase());
       return {
         temp: Math.round(response.data.main.temp),
-        condition: weather.main.toLowerCase(),
-        description: weather.description,
+        condition: normalized.condition,
+        description: normalized.label,
       };
     } catch (error) {
       console.error('Weather API error:', error);
       return this.getDefaultWeather();
     }
+  }
+
+  private normalizeWeather(main: string): { condition: string; label: string } {
+    if (main === 'rain' || main === 'drizzle') return { condition: 'rain', label: '비' };
+    if (main === 'snow')                       return { condition: 'snow', label: '눈' };
+    if (main === 'thunderstorm')               return { condition: 'rain', label: '천둥번개' };
+    if (main === 'clear')                      return { condition: 'clear', label: '맑음' };
+    if (main === 'clouds')                     return { condition: 'clouds', label: '흐림' };
+    // atmosphere group (mist, smoke, haze, dust, fog, sand, ash, squall, tornado, etc.)
+    return { condition: 'clouds', label: '흐림' };
   }
 
   private getDefaultWeather(): WeatherInfo {

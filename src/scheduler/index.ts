@@ -3,11 +3,13 @@ import { Attachment } from 'botbuilder';
 import type {
   Scheduler,
   VoteService,
+  VoteRepository,
   UserRepository,
   BlacklistRepository,
   SelectedHistoryRepository,
   SettingRepository,
   RestaurantRepository,
+  WeatherService,
 } from '../core/types.js';
 import { buildVoteCard, buildReviewCard } from '../cards/index.js';
 
@@ -24,11 +26,13 @@ export class SchedulerImpl implements Scheduler {
 
   constructor(
     private voteService: VoteService,
+    private voteRepo: VoteRepository,
     private userRepo: UserRepository,
     private blacklistRepo: BlacklistRepository,
     private historyRepo: SelectedHistoryRepository,
     private settingRepo: SettingRepository,
     private restaurantRepo: RestaurantRepository,
+    private weatherService: WeatherService,
     private sendNotification: (message: string, card?: Attachment) => Promise<void>
   ) {}
 
@@ -98,22 +102,40 @@ export class SchedulerImpl implements Scheduler {
   private async sendVoteReminder(): Promise<void> {
     const today = this.formatDate(new Date());
 
-    // Check delivery mode - skip if already triggered today
-    const triggeredDate = this.settingRepo.getVoteTriggeredDate();
-    if (triggeredDate === today) {
-      console.log('투표 카드 이미 전송됨 (배달모드), 스킵');
-      return;
+    // Get delivery mode
+    const deliveryModeActive = this.settingRepo.getDeliveryModeActive();
+    let restaurants = this.restaurantRepo.findAll();
+    if (deliveryModeActive) {
+      restaurants = restaurants.filter(r => r.is_delivery);
     }
 
     // Send vote card
-    const restaurants = this.restaurantRepo.findAll();
     const voteResults = this.voteService.getResults(today);
     const soloCount = this.voteService.getSoloCount(today);
-    const voteCard = buildVoteCard(restaurants, voteResults, soloCount);
+    const anyCount = this.voteService.getAnyCount(today);
+    const uniqueVoterCount = this.voteRepo.countUniqueVoters(today);
+    const votersByRestaurant = this.voteRepo.findVotersByRestaurant(today);
+    const soloVoters = this.voteRepo.findSoloVoters(today);
+    const anyVoters = this.voteRepo.findAnyVoters(today);
 
-    const message = `🍽️ **점침 투표 시간!**
+    const voteCard = buildVoteCard(
+      restaurants,
+      voteResults,
+      soloCount,
+      [],
+      false,
+      false,
+      votersByRestaurant,
+      soloVoters,
+      anyVoters,
+      anyCount,
+      uniqueVoterCount,
+      deliveryModeActive
+    );
 
-${this.settingRepo.getForceDecisionEnabled() ? `⏰ ${process.env.VOTE_HOUR}:${process.env.FORCE_DECISION_MINUTE}에 투표 마감됩니다!` : ''}`;
+    const message = `🍽️ **점심 투표 시간!**
+
+${this.settingRepo.getForceDecisionEnabled() ? `⏰ ${process.env.VOTE_HOUR}:${process.env.FORCE_DECISION_MINUTE || '30'}에 투표 마감됩니다!` : ''}`;
 
     await this.sendNotification(message, voteCard as any);
   }
@@ -129,12 +151,16 @@ ${result.message}
 
 이유: ${result.data.reason}`);
 
-      // Save to history
+      // Save to history with weather
       const restaurant = this.restaurantRepo.findByName(result.data.restaurant);
       if (restaurant) {
         const voteResults = this.voteService.getResults(today);
         const totalVotes = voteResults.reduce((sum, r) => sum + r.count, 0);
-        this.historyRepo.add(restaurant.id, today, totalVotes);
+
+        // Get current weather
+        const weather = await this.weatherService.getCurrent();
+
+        this.historyRepo.add(restaurant.id, today, totalVotes, weather.temp, weather.condition);
       }
     }
   }

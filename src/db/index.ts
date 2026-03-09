@@ -41,13 +41,15 @@ export class SqliteDatabase {
         aad_object_id TEXT
       );
 
-      -- Votes
+      -- Votes (v2 schema with multi-vote support)
       CREATE TABLE IF NOT EXISTS votes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         restaurant_id INTEGER,
         vote_date TEXT NOT NULL,
         is_solo INTEGER DEFAULT 0,
-        PRIMARY KEY (user_id, vote_date),
+        is_any INTEGER DEFAULT 0,
+        UNIQUE(user_id, restaurant_id, vote_date),
         FOREIGN KEY (user_id) REFERENCES users(id),
         FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
       );
@@ -79,6 +81,8 @@ export class SqliteDatabase {
         restaurant_id INTEGER NOT NULL,
         selected_date TEXT NOT NULL UNIQUE,
         vote_count INTEGER,
+        weather_temp REAL,
+        weather_condition TEXT,
         FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
       );
 
@@ -98,13 +102,84 @@ export class SqliteDatabase {
       INSERT OR IGNORE INTO settings (key, value) VALUES ('budget', '15000');
       INSERT OR IGNORE INTO settings (key, value) VALUES ('force_decision_enabled', 'true');
       INSERT OR IGNORE INTO settings (key, value) VALUES ('force_decision_minute', '30');
+      INSERT OR IGNORE INTO settings (key, value) VALUES ('delivery_mode_active', 'false');
     `);
 
-    // Migration: Add is_solo column to votes table if it doesn't exist
+    // Migrations
+    this.runMigrations();
+  }
+
+  private runMigrations(): void {
+    if (!this.db) throw new Error('Database not initialized');
+
+    // Migration 1: Add is_delivery to restaurants
     try {
-      this.db.exec('ALTER TABLE votes ADD COLUMN is_solo INTEGER DEFAULT 0');
+      this.db.exec('ALTER TABLE restaurants ADD COLUMN is_delivery INTEGER DEFAULT 0');
     } catch {
-      // Column already exists, ignore error
+      // Column already exists
+    }
+
+    // Migration 2: Handle votes table schema - check if old schema exists
+    try {
+      const columns = this.db.pragma('table_info(votes)') as any[];
+      const hasId = columns.some(col => col.name === 'id');
+      const hasIsAny = columns.some(col => col.name === 'is_any');
+
+      if (!hasId) {
+        // Old schema exists, migrate to new schema
+        this.db.exec(`
+          -- Rename old votes table
+          ALTER TABLE votes RENAME TO votes_old;
+
+          -- Create new votes table with id column
+          CREATE TABLE votes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            restaurant_id INTEGER,
+            vote_date TEXT NOT NULL,
+            is_solo INTEGER DEFAULT 0,
+            is_any INTEGER DEFAULT 0,
+            UNIQUE(user_id, restaurant_id, vote_date),
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+          );
+
+          -- Copy data from old table
+          INSERT INTO votes (user_id, restaurant_id, vote_date, is_solo, is_any)
+          SELECT user_id, restaurant_id, vote_date, is_solo, 0 FROM votes_old;
+
+          -- Drop old table
+          DROP TABLE votes_old;
+        `);
+      } else if (!hasIsAny) {
+        // Has id but missing is_any column
+        this.db.exec('ALTER TABLE votes ADD COLUMN is_any INTEGER DEFAULT 0');
+      }
+    } catch (err) {
+      console.error('Error during votes table migration:', err);
+    }
+
+    // Migration 3: Add weather columns to selected_history
+    try {
+      const columns = this.db.pragma('table_info(selected_history)') as any[];
+      if (!columns.some(col => col.name === 'weather_temp')) {
+        this.db.exec('ALTER TABLE selected_history ADD COLUMN weather_temp REAL');
+      }
+      if (!columns.some(col => col.name === 'weather_condition')) {
+        this.db.exec('ALTER TABLE selected_history ADD COLUMN weather_condition TEXT');
+      }
+    } catch {
+      // Columns already exist
+    }
+
+    // Migration 4: Add alias to restaurants
+    try {
+      const columns = this.db.pragma('table_info(restaurants)') as any[];
+      if (!columns.some(col => col.name === 'alias')) {
+        this.db.exec('ALTER TABLE restaurants ADD COLUMN alias TEXT');
+      }
+    } catch {
+      // Column already exists
     }
   }
 

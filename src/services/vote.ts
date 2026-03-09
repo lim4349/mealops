@@ -40,18 +40,28 @@ export class VoteServiceImpl implements VoteService {
       return { success: false, message: `'${restaurantName}'은(는) 블랙리스트에 있습니다.` };
     }
 
-    // Cast vote (기존 투표가 있으면 변경)
-    const existingVote = this.voteRepo.findUserVote(userId, date);
-    this.voteRepo.vote(userId, restaurant.id, date, false);
+    // Cancel solo vote if exists
+    this.voteRepo.cancelSoloVote(userId, date);
 
-    if (existingVote && existingVote.restaurant_id !== restaurant.id) {
-      const prev = this.restaurantRepo.findById(existingVote.restaurant_id!);
+    // Cancel any vote if exists
+    this.voteRepo.cancelAnyVote(userId, date);
+
+    // Check if already voted for this restaurant (toggle)
+    const userVotes = this.voteRepo.findUserVotes(userId, date);
+    const existingRestaurantVote = userVotes.find(v => v.restaurant_id === restaurant.id);
+
+    if (existingRestaurantVote) {
+      // Toggle: cancel the vote
+      this.voteRepo.cancelVote(userId, restaurant.id, date);
       return {
         success: true,
-        message: `${userName}님의 투표가 '${prev?.name ?? '이전 식당'}'에서 '${restaurantName}'(으)로 변경되었습니다! 🔄`,
+        message: `${userName}님의 '${restaurantName}' 투표가 취소되었습니다! 🗳️`,
         data: { restaurant: restaurant.name, category: restaurant.category },
       };
     }
+
+    // Cast new vote
+    this.voteRepo.vote(userId, restaurant.id, date, false);
 
     return {
       success: true,
@@ -63,6 +73,23 @@ export class VoteServiceImpl implements VoteService {
   async voteSolo(userId: string, userName: string, date: string): Promise<ServiceResponse> {
     // Find or create user
     this.userRepo.findOrCreate(userId, userName);
+
+    // Cancel all restaurant votes
+    this.voteRepo.cancelAllVotes(userId, date);
+
+    // Cancel any vote if exists
+    this.voteRepo.cancelAnyVote(userId, date);
+
+    // Check if already solo voted (toggle)
+    const existingSoloVote = this.voteRepo.findUserVote(userId, date);
+    if (existingSoloVote?.is_solo) {
+      // Toggle: cancel the solo vote
+      this.voteRepo.cancelSoloVote(userId, date);
+      return {
+        success: true,
+        message: `${userName}님의 혼밥 신청이 취소되었습니다! 🍱`,
+      };
+    }
 
     // Register as solo (혼밥)
     this.voteRepo.vote(userId, null, date, true);
@@ -79,6 +106,40 @@ export class VoteServiceImpl implements VoteService {
 
   getSoloCount(date: string): number {
     return this.voteRepo.getSoloCount(date);
+  }
+
+  getAnyCount(date: string): number {
+    return this.voteRepo.getAnyCount(date);
+  }
+
+  async voteAny(userId: string, userName: string, date: string): Promise<ServiceResponse> {
+    // Find or create user
+    this.userRepo.findOrCreate(userId, userName);
+
+    // Cancel all restaurant votes
+    this.voteRepo.cancelAllVotes(userId, date);
+
+    // Cancel solo vote if exists
+    this.voteRepo.cancelSoloVote(userId, date);
+
+    // Check if already any voted (toggle)
+    const existingAnyVote = this.voteRepo.findUserAnyVote(userId, date);
+    if (existingAnyVote) {
+      // Toggle: cancel the any vote
+      this.voteRepo.cancelAnyVote(userId, date);
+      return {
+        success: true,
+        message: `${userName}님의 '아무거나' 투표가 취소되었습니다! 🎲`,
+      };
+    }
+
+    // Register as any (아무거나)
+    this.voteRepo.vote(userId, null, date, false, true);
+
+    return {
+      success: true,
+      message: `${userName}님이 '아무거나'에 투표했습니다! 🎲`,
+    };
   }
 
   decideWinner(date: string): ServiceResponse<{ restaurant: string; reason: string }> {

@@ -77,8 +77,28 @@ const adapter = new BotFrameworkAdapter({
 
 // Error handler
 adapter.onTurnError = async (context, error) => {
-  console.error('Bot error:', error);
-  await context.sendActivity('오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
+  const errorMsg = error instanceof Error ? error.message : String(error);
+
+  // Log detailed error info
+  console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.error('❌ Bot Framework Error:');
+  console.error(`   Type: ${error?.constructor?.name || 'Unknown'}`);
+  console.error(`   Message: ${errorMsg}`);
+  if (errorMsg.includes('Authorization') || errorMsg.includes('401')) {
+    console.error('   Status: Azure Bot Service 인증 실패');
+    console.error('   Action: MICROSOFT_APP_ID/PASSWORD 확인 필요');
+  }
+  console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
+  try {
+    // Only try to send activity if there's a valid context
+    if (context && context.activity) {
+      await context.sendActivity('일시적인 오류입니다. 잠시 후 다시 시도해주세요.');
+    }
+  } catch (sendErr) {
+    // If send fails, just log it - don't crash
+    console.error('Failed to send error message:', sendErr instanceof Error ? sendErr.message : sendErr);
+  }
 };
 
 // Notification function - send to all conversation references
@@ -97,25 +117,17 @@ async function sendNotification(message: string, card?: any): Promise<void> {
 // Initialize scheduler
 const scheduler = new SchedulerImpl(
   voteService,
+  voteRepo,
   userRepo,
   blacklistRepo,
   historyRepo,
   settingRepo,
   restaurantRepo,
+  weatherService,
   sendNotification
 );
 
-const commandHandler = new CommandHandler(
-  restaurantRepo,
-  voteService,
-  recommendationService,
-  favoriteService,
-  blacklistRepo,
-  userRepo,
-  reviewRepo,
-  settingRepo,
-  historyRepo
-);
+const commandHandler = new CommandHandler();
 
 // Create dependencies container
 const dependencies: Dependencies = {
@@ -159,7 +171,21 @@ app.post('/api/messages', (req, res) => {
       return;
     }
     await bot.run(context);
+  }).catch((err: Error) => {
+    console.error('processActivity error (non-fatal):', err.message);
+    if (!res.headersSent) {
+      res.status(500).send();
+    }
   });
+});
+
+// Prevent unhandled promise rejections from crashing the server
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection (non-fatal):', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught exception (non-fatal):', err.message);
 });
 
 // Test endpoint
@@ -169,8 +195,7 @@ app.post('/test', async (req, res) => {
     res.status(400).json({ error: 'text 필드가 필요합니다' });
     return;
   }
-  const parsed = commandHandler.parseCommand(text);
-  const result = await commandHandler.handle(parsed, userId, userName);
+  const result = await commandHandler.handle();
   res.json(result);
 });
 

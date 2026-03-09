@@ -2,10 +2,12 @@
 export interface Restaurant {
   id: number;
   name: string;
+  alias?: string;
   category: RestaurantCategory;
   distance: number;
   price: number;
   is_active: boolean;
+  is_delivery?: boolean;
 }
 
 export type RestaurantCategory = '한식' | '일식' | '중식' | '양식' | '분식' | '기타';
@@ -21,6 +23,7 @@ export interface Vote {
   restaurant_id: number | null;
   vote_date: string; // YYYY-MM-DD
   is_solo: boolean;
+  is_any?: boolean;
 }
 
 export interface Blacklist {
@@ -43,6 +46,8 @@ export interface SelectedHistory {
   restaurant_id: number;
   selected_date: string;
   vote_count: number;
+  weather_temp?: number;
+  weather_condition?: string;
 }
 
 export interface Holiday {
@@ -58,9 +63,16 @@ export interface Setting {
 // DTO Types
 export interface CreateRestaurantDto {
   name: string;
+  alias?: string;
   category: RestaurantCategory;
   distance: number;
   price: number;
+  is_delivery?: boolean;
+}
+
+export interface VoterEntry {
+  user_id: string;
+  user_name: string;
 }
 
 export interface VoteResult {
@@ -85,21 +97,7 @@ export interface UserFavoriteStats {
 }
 
 // Command Types
-export type Command =
-  | 'help'
-  | 'add'
-  | 'delete'
-  | 'list'
-  | 'blacklist'
-  | 'vote'
-  | 'recommend'
-  | 'refresh'
-  | 'favorite'
-  | 'dashboard'
-  | 'review'
-  | 'settings'
-  | 'holiday'
-  | 'delivery';
+export type Command = 'help';
 
 export interface ParsedCommand {
   command: Command;
@@ -108,10 +106,22 @@ export interface ParsedCommand {
 }
 
 // Service Response Types
+export type CardType =
+  | 'main_menu'
+  | 'vote'
+  | 'recommend'
+  | 'list'
+  | 'blacklist'
+  | 'settings'
+  | 'dashboard'
+  | 'response'
+  | 'add_form';
+
 export interface ServiceResponse<T = unknown> {
   success: boolean;
   data?: T;
   message: string;
+  cardType?: CardType;
 }
 
 // Weather Types
@@ -156,15 +166,27 @@ export interface RestaurantRepository {
   findByCategory(category: RestaurantCategory): Restaurant[];
   delete(id: number): boolean;
   updateActive(id: number, isActive: boolean): boolean;
+  update(id: number, dto: Partial<CreateRestaurantDto>): void;
 }
 
 export interface VoteRepository {
-  vote(userId: string, restaurantId: number | null, date: string, isSolo?: boolean): void;
+  vote(userId: string, restaurantId: number | null, date: string, isSolo?: boolean, isAny?: boolean): void;
   findTodayVotes(date: string): Vote[];
   findUserVote(userId: string, date: string): Vote | undefined;
+  findUserVotes(userId: string, date: string): Vote[]; // plural - multiple votes
   countByRestaurant(restaurantId: number, date: string): number;
+  countUniqueVoters(date: string): number;
   getResults(date: string): VoteResult[];
   getSoloCount(date: string): number;
+  cancelVote(userId: string, restaurantId: number, date: string): boolean;
+  findVotersByRestaurant(date: string): Map<number, VoterEntry[]>;
+  findSoloVoters(date: string): VoterEntry[];
+  cancelSoloVote(userId: string, date: string): boolean;
+  cancelAllVotes(userId: string, date: string): boolean;
+  getAnyCount(date: string): number;
+  findUserAnyVote(userId: string, date: string): Vote | undefined;
+  cancelAnyVote(userId: string, date: string): boolean;
+  findAnyVoters(date: string): VoterEntry[];
 }
 
 export interface BlacklistRepository {
@@ -183,10 +205,11 @@ export interface ReviewRepository {
 }
 
 export interface SelectedHistoryRepository {
-  add(restaurantId: number, date: string, voteCount: number): void;
+  add(restaurantId: number, date: string, voteCount: number, weatherTemp?: number, weatherCondition?: string): void;
   findRecent(days: number): SelectedHistory[];
   findByDate(date: string): SelectedHistory | undefined;
   getRecentVisitDates(restaurantId: number, days: number): string[];
+  findByWeather(condition: string, tempMin?: number, tempMax?: number): SelectedHistory[];
 }
 
 export interface UserRepository {
@@ -204,6 +227,8 @@ export interface SettingRepository {
   setForceDecisionEnabled(enabled: boolean): void;
   getVoteTriggeredDate(): string;
   setVoteTriggeredDate(date: string): void;
+  getDeliveryModeActive(): boolean;
+  setDeliveryModeActive(active: boolean): void;
 }
 
 // Service Interfaces
@@ -231,13 +256,15 @@ export interface RecommendationService {
 export interface VoteService {
   vote(userId: string, userName: string, restaurantName: string, date: string): Promise<ServiceResponse>;
   voteSolo(userId: string, userName: string, date: string): Promise<ServiceResponse>;
+  voteAny(userId: string, userName: string, date: string): Promise<ServiceResponse>;
   getResults(date: string): VoteResult[];
   getSoloCount(date: string): number;
+  getAnyCount(date: string): number;
   decideWinner(date: string): ServiceResponse<{ restaurant: string; reason: string }>;
 }
 
 export interface FavoriteService {
-  getUserFavorites(userId: string): UserFavoriteStats;
+  getUserFavorites(userId: string, userName?: string): UserFavoriteStats;
   getUserFavoritesByName(userName: string): UserFavoriteStats | undefined;
 }
 

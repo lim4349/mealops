@@ -17,10 +17,10 @@ export class FavoriteServiceImpl implements FavoriteService {
     private restaurantRepo: RestaurantRepository
   ) {}
 
-  getUserFavorites(userId: string): UserFavoriteStats {
-    const user = this.userRepo.findById(userId);
+  getUserFavorites(userId: string, userName?: string): UserFavoriteStats {
+    let user = this.userRepo.findById(userId);
     if (!user) {
-      throw new Error('사용자를 찾을 수 없습니다.');
+      user = this.userRepo.findOrCreate(userId, userName ?? '사용자');
     }
 
     return this.calculateFavorites(user);

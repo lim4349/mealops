@@ -2,10 +2,9 @@ import {
   ActivityHandler,
   TurnContext,
   MessageFactory,
-  CardFactory,
 } from 'botbuilder';
 import type { CommandHandler } from '../handlers/command.js';
-import type { Dependencies, AdaptiveCardInvokeResponse } from '../core/types.js';
+import type { Dependencies, AdaptiveCardInvokeResponse, RecommendationResult } from '../core/types.js';
 import {
   buildMainMenuCard,
   buildVoteCard,
@@ -16,6 +15,8 @@ import {
   buildDashboardCard,
   buildResponseCard,
   buildReviewCard,
+  buildEditRestaurantCard,
+  buildAddRestaurantCard,
 } from '../cards/index.js';
 
 export const conversationReferences = new Map<string, any>();
@@ -24,12 +25,14 @@ export class MeaLOpsBot extends ActivityHandler {
   private commandHandler: CommandHandler;
   private deps: Dependencies;
 
+  // AI 추천 캐시 (키: YYYY-MM-DD, 오늘 날짜 기준)
+  private recommendCache = new Map<string, { data: RecommendationResult[]; timestamp: number }>();
+  private readonly RECOMMEND_CACHE_TTL = 60 * 60 * 1000; // 1시간
+
   constructor(dependencies: Dependencies) {
     super();
-
     this.deps = dependencies;
 
-    // Initialize command handler with all dependencies
     const { CommandHandler } = require('../handlers/command.js');
     this.commandHandler = new CommandHandler(
       dependencies.restaurantRepo,
@@ -46,44 +49,37 @@ export class MeaLOpsBot extends ActivityHandler {
     this.onMessage(async (context: TurnContext, next: () => Promise<void>) => {
       await this.saveConversationReference(context);
 
-      const text = context.activity.text?.trim();
+      // MS Teams 멘션 태그 (<at>봇이름</at>) 제거 후 명령 파싱
+      const rawText = context.activity.text?.trim() ?? '';
+      const text = rawText.replace(/<at>[^<]*<\/at>/gi, '').trim();
 
-      if (!text) {
-        // Empty message - show main menu
-        await context.sendActivity(MessageFactory.attachment(buildMainMenuCard()));
-        return await next();
+      // 모든 텍스트 메시지 → 날씨 포함 메인메뉴 카드
+      let card: any;
+      try {
+        const weather = await this.deps.weatherService.getCurrent();
+        card = buildMainMenuCard(weather);
+      } catch {
+        card = buildMainMenuCard();
       }
 
-      // Parse command
-      const parsed = this.commandHandler.parseCommand(text);
-
-      // Get user info
-      const userId = context.activity.from?.id ?? 'unknown';
-      const userName = context.activity.from?.name ?? '익명';
-
-      // Handle command
-      const response = await this.commandHandler.handle(parsed, userId, userName);
-
-      // Send response
-      await context.sendActivity(response.message);
-
+      await context.sendActivity(MessageFactory.attachment(card));
       await next();
     });
 
-
-    // Handle conversation update events to welcome new members
     this.onEvent(async (context: TurnContext, next: () => Promise<void>) => {
       if (context.activity.type === 'conversationUpdateActivity' && context.activity.membersAdded) {
-        const welcomeText = '**🍽️ MeaLOps에 오신 것을 환영합니다!**\n\n점심 메뉴 고르기가 이제 즐거워집니다!';
-
         for (const member of context.activity.membersAdded) {
           if (member.id !== context.activity.recipient?.id) {
-            await context.sendActivity(welcomeText);
-            await context.sendActivity(MessageFactory.attachment(buildMainMenuCard()));
+            await context.sendActivity('**🍽️ MeaLOps에 오신 것을 환영합니다!**\n\n점심 메뉴 고르기가 이제 즐거워집니다!');
+            try {
+              const weather = await this.deps.weatherService.getCurrent();
+              await context.sendActivity(MessageFactory.attachment(buildMainMenuCard(weather)));
+            } catch {
+              await context.sendActivity(MessageFactory.attachment(buildMainMenuCard()));
+            }
           }
         }
       }
-
       await next();
     });
   }
@@ -103,16 +99,27 @@ export class MeaLOpsBot extends ActivityHandler {
     const userName = context.activity.from?.name ?? '익명';
     const today = new Date().toISOString().split('T')[0];
 
+    // 오늘 날짜가 아닌 오래된 캐시 정리
+    for (const [key] of this.recommendCache) {
+      if (key !== today) this.recommendCache.delete(key);
+    }
+
     try {
       switch (verb) {
-        case 'main_menu':
-          return this.cardResponse(buildMainMenuCard());
+        case 'main_menu': {
+          try {
+            const weather = await this.deps.weatherService.getCurrent();
+            return this.cardResponse(buildMainMenuCard(weather));
+          } catch {
+            return this.cardResponse(buildMainMenuCard());
+          }
+        }
 
         case 'show_vote':
           return this.cardResponse(this.buildVoteCardForToday(userId));
 
         case 'vote': {
-          const { restaurantId, restaurantName } = data;
+          const { restaurantName } = data;
           await this.deps.voteService.vote(userId, userName, restaurantName, today);
           return this.cardResponse(this.buildVoteCardForToday(userId));
         }
@@ -122,8 +129,34 @@ export class MeaLOpsBot extends ActivityHandler {
           return this.cardResponse(this.buildVoteCardForToday(userId));
         }
 
+        case 'vote_any': {
+          await this.deps.voteService.voteAny(userId, userName, today);
+          return this.cardResponse(this.buildVoteCardForToday(userId));
+        }
+
         case 'recommend': {
+          const cached = this.recommendCache.get(today);
+          let recommendations: RecommendationResult[];
+          if (cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
+            recommendations = cached.data;
+          } else {
+            recommendations = await this.deps.recommendationService.getRecommendations(userId);
+            if (recommendations.length > 0) {
+              this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
+            }
+          }
+          if (recommendations.length === 0) {
+            return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
+          }
+          return this.cardResponse(buildRecommendCard(recommendations));
+        }
+
+        case 'refresh_recommend': {
+          this.recommendCache.delete(today);
           const recommendations = await this.deps.recommendationService.getRecommendations(userId);
+          if (recommendations.length > 0) {
+            this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
+          }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
           }
@@ -131,14 +164,79 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'show_list': {
+          return this.cardResponse(this.buildListCardForUser(userId));
+        }
+
+        case 'sort_list': {
+          const { sortBy, sortOrder } = data;
           const restaurants = this.deps.restaurantRepo.findAll();
-          return this.cardResponse(buildListCard(restaurants));
+          const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
+          const userBlacklistedIds = this.deps.blacklistRepo.getUserBlacklist(userId).map(r => r.id);
+          return this.cardResponse(buildListCard(restaurants, globalBlacklistedIds, sortBy ?? 'default', sortOrder ?? 'asc', userBlacklistedIds));
+        }
+
+        case 'add_restaurant_form':
+          return this.cardResponse(buildAddRestaurantCard());
+
+        case 'create_restaurant': {
+          const { name, alias, category, distance, price, is_delivery } = data;
+          if (!name || !category) {
+            return this.cardResponse(buildResponseCard('식당 이름과 카테고리는 필수입니다.', true));
+          }
+          this.deps.restaurantRepo.create({
+            name: String(name).trim(),
+            alias: alias ? String(alias).trim() : undefined,
+            category,
+            distance: Number(distance) || 0,
+            price: Number(price) || 0,
+            is_delivery: is_delivery === 'true',
+          });
+          return this.cardResponse(this.buildListCardForUser(userId));
+        }
+
+        case 'edit_restaurant': {
+          const restaurant = this.deps.restaurantRepo.findById(data.restaurantId);
+          if (!restaurant) {
+            return this.cardResponse(buildResponseCard('식당을 찾을 수 없습니다.', true));
+          }
+          return this.cardResponse(buildEditRestaurantCard(restaurant));
+        }
+
+        case 'save_restaurant': {
+          const { restaurantId, name, alias, category, distance, price, is_delivery } = data;
+          this.deps.restaurantRepo.update(restaurantId, {
+            name: name ? String(name).trim() : undefined,
+            alias: alias !== undefined ? (String(alias).trim() || undefined) : undefined,
+            category: category || undefined,
+            distance: distance !== undefined ? Number(distance) : undefined,
+            price: price !== undefined ? Number(price) : undefined,
+            is_delivery: is_delivery !== undefined ? is_delivery === 'true' : undefined,
+          });
+          return this.cardResponse(this.buildListCardForUser(userId));
+        }
+
+        case 'cancel_edit':
+          return this.cardResponse(this.buildListCardForUser(userId));
+
+        case 'delete_restaurant': {
+          this.deps.restaurantRepo.delete(data.restaurantId);
+          return this.cardResponse(this.buildListCardForUser(userId));
+        }
+
+        case 'blacklist_toggle': {
+          const { restaurantId } = data;
+          const isBlacklisted = this.deps.blacklistRepo.isBlacklisted(userId, restaurantId);
+          if (isBlacklisted) {
+            this.deps.blacklistRepo.remove(userId, restaurantId);
+          } else {
+            this.deps.blacklistRepo.add(userId, restaurantId);
+          }
+          return this.cardResponse(this.buildListCardForUser(userId));
         }
 
         case 'my_favorites': {
-          const stats = this.deps.favoriteService.getUserFavorites(userId);
-          const message = this.buildFavoritesMessage(stats);
-          return this.cardResponse(buildResponseCard(message, true));
+          const stats = this.deps.favoriteService.getUserFavorites(userId, userName);
+          return this.cardResponse(buildResponseCard(this.buildFavoritesMessage(stats), true));
         }
 
         case 'my_blacklist': {
@@ -147,37 +245,73 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'blacklist_remove': {
-          const { restaurantId, restaurantName } = data;
-          this.deps.blacklistRepo.remove(userId, restaurantId);
+          this.deps.blacklistRepo.remove(userId, data.restaurantId);
           const blacklisted = this.deps.blacklistRepo.getUserBlacklist(userId);
           return this.cardResponse(buildBlacklistCard(blacklisted));
         }
 
         case 'blacklist_add': {
-          const { restaurantName } = data;
-          const restaurant = this.deps.restaurantRepo.findByName(restaurantName);
+          const restaurant = this.deps.restaurantRepo.findByName(data.restaurantName);
           if (restaurant) {
             this.deps.blacklistRepo.add(userId, restaurant.id);
           }
-          return this.cardResponse(buildResponseCard(`'${restaurantName}'이(가) 블랙리스트에 추가되었습니다.`, true));
+          return this.cardResponse(buildResponseCard(`'${data.restaurantName}'이(가) 블랙리스트에 추가되었습니다.`, true));
         }
 
         case 'show_settings': {
           const budget = this.deps.settingRepo.getBudget();
           const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
-          return this.cardResponse(buildSettingsCard(budget, forceEnabled));
+          const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive));
         }
 
+        case 'set_budget': {
+          const budgetValue = parseInt(String(data.budget ?? '0'), 10);
+          if (budgetValue > 0) {
+            this.deps.settingRepo.setBudget(budgetValue);
+          }
+          const budget = this.deps.settingRepo.getBudget();
+          const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
+          const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive));
+        }
+
+        case 'toggle_force_decision': {
+          const current = this.deps.settingRepo.getForceDecisionEnabled();
+          this.deps.settingRepo.setForceDecisionEnabled(!current);
+          const budget = this.deps.settingRepo.getBudget();
+          const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+          return this.cardResponse(buildSettingsCard(budget, !current, deliveryModeActive));
+        }
+
+        // 하위 호환 (기존 verb들)
         case 'set_force_on': {
           this.deps.settingRepo.setForceDecisionEnabled(true);
           const budget = this.deps.settingRepo.getBudget();
-          return this.cardResponse(buildSettingsCard(budget, true));
+          const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+          return this.cardResponse(buildSettingsCard(budget, true, deliveryModeActive));
         }
 
         case 'set_force_off': {
           this.deps.settingRepo.setForceDecisionEnabled(false);
           const budget = this.deps.settingRepo.getBudget();
-          return this.cardResponse(buildSettingsCard(budget, false));
+          const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+          return this.cardResponse(buildSettingsCard(budget, false, deliveryModeActive));
+        }
+
+        case 'toggle_delivery_setting': {
+          const current = this.deps.settingRepo.getDeliveryModeActive();
+          this.deps.settingRepo.setDeliveryModeActive(!current);
+          const budget = this.deps.settingRepo.getBudget();
+          const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, !current));
+        }
+
+        case 'delivery': {
+          // 레거시 verb
+          const current = this.deps.settingRepo.getDeliveryModeActive();
+          this.deps.settingRepo.setDeliveryModeActive(!current);
+          return this.cardResponse(this.buildVoteCardForToday(userId));
         }
 
         case 'dashboard': {
@@ -200,14 +334,14 @@ export class MeaLOpsBot extends ActivityHandler {
           return this.cardResponse(buildResponseCard(`⭐ '${restaurantName}'에 ${rating}점 리뷰가 등록되었습니다!`, true));
         }
 
-        case 'delivery': {
-          // Delivery mode - save triggered date and show vote card
-          this.deps.settingRepo.setVoteTriggeredDate(today);
-          return this.cardResponse(this.buildVoteCardForToday(userId));
+        default: {
+          try {
+            const weather = await this.deps.weatherService.getCurrent();
+            return this.cardResponse(buildMainMenuCard(weather));
+          } catch {
+            return this.cardResponse(buildMainMenuCard());
+          }
         }
-
-        default:
-          return this.cardResponse(buildMainMenuCard());
       }
     } catch (error) {
       console.error('Card action error:', error);
@@ -215,48 +349,68 @@ export class MeaLOpsBot extends ActivityHandler {
     }
   }
 
+  // 식당 목록 카드 헬퍼 (userId 기반으로 블랙리스트 포함)
+  private buildListCardForUser(userId: string): any {
+    const restaurants = this.deps.restaurantRepo.findAll();
+    const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
+    const userBlacklistedIds = this.deps.blacklistRepo.getUserBlacklist(userId).map(r => r.id);
+    return buildListCard(restaurants, globalBlacklistedIds, 'default', 'asc', userBlacklistedIds);
+  }
+
   private buildVoteCardForToday(userId: string): any {
     const today = new Date().toISOString().split('T')[0];
-    const restaurants = this.deps.restaurantRepo.findAll();
+
+    const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
+    let restaurants = this.deps.restaurantRepo.findAll();
+    if (deliveryModeActive) {
+      restaurants = restaurants.filter(r => r.is_delivery);
+    }
+
+    const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
     const voteResults = this.deps.voteService.getResults(today);
     const soloCount = this.deps.voteService.getSoloCount(today);
+    const anyCount = this.deps.voteService.getAnyCount(today);
+    const uniqueVoterCount = this.deps.voteRepo.countUniqueVoters(today);
 
-    // Get current user's vote
-    const userVote = this.deps.voteRepo.findUserVote(userId, today);
+    const userVotes = this.deps.voteRepo.findUserVotes(userId, today);
+    const userVoteRestaurantIds = userVotes
+      .filter(v => !v.is_solo && !v.is_any)
+      .map(v => v.restaurant_id!)
+      .filter(id => restaurants.some(r => r.id === id));
+    const userIsSolo = userVotes.some(v => v.is_solo);
+    const userIsAny = userVotes.some(v => v.is_any);
 
-    return buildVoteCard(restaurants, voteResults, soloCount, userVote?.restaurant_id, userVote?.is_solo);
+    const votersByRestaurant = this.deps.voteRepo.findVotersByRestaurant(today);
+    const soloVoters = this.deps.voteRepo.findSoloVoters(today);
+    const anyVoters = this.deps.voteRepo.findAnyVoters(today);
+
+    return buildVoteCard(
+      restaurants, voteResults, soloCount,
+      userVoteRestaurantIds, userIsSolo, userIsAny,
+      votersByRestaurant, soloVoters, anyVoters,
+      anyCount, uniqueVoterCount, deliveryModeActive, globalBlacklistedIds
+    );
   }
 
   private buildFavoritesMessage(stats: any): string {
     let message = `**🏆 ${stats.user_name}님의 최애 식당**\n\n`;
-
     if (stats.most_visited.length > 0) {
       message += `**📊 자주 가는 식당**\n`;
-      stats.most_visited.forEach((v: any) => {
-        message += `• ${v.name} (${v.count}회)\n`;
-      });
+      stats.most_visited.forEach((v: any) => { message += `• ${v.name} (${v.count}회)\n`; });
       message += '\n';
     }
-
     if (stats.highest_rated.length > 0) {
       message += `**⭐ 높은 평점**\n`;
-      stats.highest_rated.forEach((v: any) => {
-        message += `• ${v.name} (${v.rating}점)\n`;
-      });
+      stats.highest_rated.forEach((v: any) => { message += `• ${v.name} (${v.rating}점)\n`; });
       message += '\n';
     }
-
     if (stats.recent_visits.length > 0) {
       message += `**🕐 최근 방문**\n`;
-      stats.recent_visits.forEach((v: any) => {
-        message += `• ${v.name} (${v.date})\n`;
-      });
+      stats.recent_visits.forEach((v: any) => { message += `• ${v.name} (${v.date})\n`; });
     }
-
-    if (stats.most_visited.length === 0 && stats.highest_rated.length === 0 && stats.recent_visits.length === 0) {
+    if (!stats.most_visited.length && !stats.highest_rated.length && !stats.recent_visits.length) {
       message += '아직 데이터가 없습니다. 투표하고 리뷰를 남겨보세요!';
     }
-
     return message;
   }
 

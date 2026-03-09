@@ -37,6 +37,8 @@ export class OllamaServiceImpl implements OllamaService {
       .map(r => `- ${r.name} (${r.category}, ₩${r.price})`)
       .join('\n');
 
+    const weatherInstruction = this.buildWeatherInstruction(context.weather);
+
     return `오늘 강남역 날씨는 ${context.weather.temp}도, ${context.weather.description}입니다.
 
 반드시 아래 식당 목록 중에서만 선택하세요:
@@ -50,7 +52,7 @@ ${restaurantList}
 조건:
 1. 위 식당 목록에 있는 식당만 추천 (목록에 없는 식당 절대 추천 금지)
 2. 블랙리스트, 최근 먹은 식당 제외
-3. 날씨 고려 (추우면 따뜻한 한식, 더우면 시원한 음식)
+3. 날씨 고려 (${weatherInstruction})
 4. 예산 내 식당 우선
 
 반드시 JSON 배열 형식으로만 답변하세요. 다른 말은 하지 말고 JSON만:
@@ -58,6 +60,22 @@ ${restaurantList}
   {"name": "식당이름", "reason": "추천 이유 (짧게)"},
   ...
 ]`;
+  }
+
+  private buildWeatherInstruction(weather: import('../core/types.js').WeatherInfo): string {
+    const temp = weather.temp;
+    const condition = weather.condition.toLowerCase();
+
+    if (condition.includes('rain') || condition.includes('snow')) {
+      return '비/눈이 오므로 거리가 가깝고 실내 편한 식당 우선 추천';
+    }
+    if (temp < 10) {
+      return '추운 날씨이므로 따뜻한 한식/국물류 우선 추천';
+    }
+    if (temp > 25) {
+      return '더운 날씨이므로 시원한 냉면/국수류/음료 우선 추천';
+    }
+    return '날씨가 좋으니 다양한 선택지에서 평점 높은 식당 추천';
   }
 
   private parseResponse(text: string): RecommendationResult[] {

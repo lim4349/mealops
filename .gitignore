@@ -7,3 +7,4 @@ data/*.db-wal
 *.log
 .DS_Store
 .omc/
+.claude/
