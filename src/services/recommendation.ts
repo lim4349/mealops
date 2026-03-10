@@ -20,7 +20,7 @@ export class RecommendationServiceImpl implements RecommendationService {
     private settingRepo: SettingRepository
   ) {}
 
-  async getRecommendations(userId: string): Promise<import('../core/types.js').RecommendationResult[]> {
+  async getRecommendations(userId: string, previousNames: string[] = []): Promise<import('../core/types.js').RecommendationResult[]> {
     // Get current weather
     const weather = await this.weatherService.getCurrent();
 
@@ -56,9 +56,19 @@ export class RecommendationServiceImpl implements RecommendationService {
 
     const budget = this.settingRepo.getBudget();
 
-    // Build available list (excluding blacklisted and recent)
+    // 저평점 식당 필터링 (리뷰가 있는데 3.0 미만이면 제외)
+    const lowRatedIds = new Set(
+      allRestaurants
+        .map(r => ({ id: r.id, rating: this.reviewRepo.getAverageRating(r.id) }))
+        .filter(r => r.rating > 0 && r.rating < 3.0)
+        .map(r => r.id)
+    );
+
+    // Build available list (excluding blacklisted, recent, low-rated)
     const availableRestaurants = allRestaurants.filter(r =>
-      !blacklistedNames.includes(r.name) && !recentVisits.includes(r.name)
+      !blacklistedNames.includes(r.name) &&
+      !recentVisits.includes(r.name) &&
+      !lowRatedIds.has(r.id)
     );
     const availableNames = new Set(availableRestaurants.map(r => r.name));
 
@@ -73,7 +83,9 @@ export class RecommendationServiceImpl implements RecommendationService {
           name: r.name,
           category: r.category,
           price: r.price,
+          distance: r.distance,
         })),
+        previousRecommendations: previousNames,
       });
 
       // DB에 존재하는 식당만 필터링
@@ -155,12 +167,18 @@ export class RecommendationServiceImpl implements RecommendationService {
       return Math.random() - 0.5;
     });
 
+    const reasonByCondition = (() => {
+      if (weather.condition === 'rain' || weather.condition === 'snow') return '비/눈 오는 날 가까운 식당';
+      if (weather.temp < 10) return '추운 날 따뜻한 메뉴';
+      if (weather.temp > 25) return '더운 날 시원한 메뉴';
+      return '오늘 날씨에 어울리는 메뉴';
+    })();
+
     return sorted.slice(0, 5).map(r => ({
       name: r.name,
-      reason: `${r.category}, ${r.distance}m, ₩${r.price}`,
+      reason: `${reasonByCondition} · ${r.category} · ${r.distance}m`,
       category: r.category,
       distance: r.distance,
-      price: r.price,
     }));
   }
 }

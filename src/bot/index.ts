@@ -17,6 +17,7 @@ import {
   buildReviewCard,
   buildEditRestaurantCard,
   buildAddRestaurantCard,
+  type SortKey,
 } from '../cards/index.js';
 
 export const conversationReferences = new Map<string, any>();
@@ -52,6 +53,7 @@ export class MeaLOpsBot extends ActivityHandler {
       // MS Teams 멘션 태그 (<at>봇이름</at>) 제거 후 명령 파싱
       const rawText = context.activity.text?.trim() ?? '';
       const text = rawText.replace(/<at>[^<]*<\/at>/gi, '').trim();
+      console.log(`[onMessage] rawText="${rawText}" → text="${text}"`);
 
       // 모든 텍스트 메시지 → 날씨 포함 메인메뉴 카드
       let card: any;
@@ -62,7 +64,11 @@ export class MeaLOpsBot extends ActivityHandler {
         card = buildMainMenuCard();
       }
 
-      await context.sendActivity(MessageFactory.attachment(card));
+      try {
+        await context.sendActivity(MessageFactory.attachment(card));
+      } catch (err: any) {
+        console.error('[onMessage] sendActivity FAILED:', err?.message);
+      }
       await next();
     });
 
@@ -152,8 +158,9 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'refresh_recommend': {
+          const previousNames = (this.recommendCache.get(today)?.data ?? []).map(r => r.name);
           this.recommendCache.delete(today);
-          const recommendations = await this.deps.recommendationService.getRecommendations(userId);
+          const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames);
           if (recommendations.length > 0) {
             this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
           }
@@ -168,11 +175,14 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'sort_list': {
-          const { sortBy, sortOrder } = data;
-          const restaurants = this.deps.restaurantRepo.findAll();
-          const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
-          const userBlacklistedIds = this.deps.blacklistRepo.getUserBlacklist(userId).map(r => r.id);
-          return this.cardResponse(buildListCard(restaurants, globalBlacklistedIds, sortBy ?? 'default', sortOrder ?? 'asc', userBlacklistedIds));
+          // 구 형식(sortBy/sortOrder) 및 신 형식(sortKeys/groupByCategory) 모두 지원
+          const sortKeys = Array.isArray(data.sortKeys)
+            ? data.sortKeys
+            : (data.sortBy && data.sortBy !== 'default' && data.sortBy !== 'category'
+                ? [{ field: data.sortBy, order: data.sortOrder ?? 'asc' }]
+                : []);
+          const groupByCategory = data.groupByCategory ?? (data.sortBy === 'category');
+          return this.cardResponse(this.buildListCardForUser(userId, sortKeys, groupByCategory));
         }
 
         case 'add_restaurant_form':
@@ -315,8 +325,14 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'dashboard': {
-          const history = this.deps.historyRepo.findRecent(7);
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo));
+          const history = this.deps.historyRepo.findRecent(90);
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week'));
+        }
+
+        case 'dashboard_view': {
+          const view = (data.view === 'month') ? 'month' : 'week';
+          const history = this.deps.historyRepo.findRecent(90);
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view));
         }
 
         case 'review': {
@@ -350,11 +366,11 @@ export class MeaLOpsBot extends ActivityHandler {
   }
 
   // 식당 목록 카드 헬퍼 (userId 기반으로 블랙리스트 포함)
-  private buildListCardForUser(userId: string): any {
+  private buildListCardForUser(userId: string, sortKeys: SortKey[] = [], groupByCategory: boolean = false): any {
     const restaurants = this.deps.restaurantRepo.findAll();
     const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
     const userBlacklistedIds = this.deps.blacklistRepo.getUserBlacklist(userId).map(r => r.id);
-    return buildListCard(restaurants, globalBlacklistedIds, 'default', 'asc', userBlacklistedIds);
+    return buildListCard(restaurants, globalBlacklistedIds, sortKeys, groupByCategory, userBlacklistedIds);
   }
 
   private buildVoteCardForToday(userId: string): any {

@@ -242,7 +242,8 @@ export interface RecommendationContext {
   topRated: string[];
   blacklisted: string[];
   budget: number;
-  availableRestaurants: { name: string; category: string; price: number }[];
+  availableRestaurants: { name: string; category: string; price: number; distance: number }[];
+  previousRecommendations?: string[];
 }
 
 export interface WeatherService {
@@ -250,7 +251,7 @@ export interface WeatherService {
 }
 
 export interface RecommendationService {
-  getRecommendations(userId: string): Promise<RecommendationResult[]>;
+  getRecommendations(userId: string, previousNames?: string[]): Promise<RecommendationResult[]>;
 }
 
 export interface VoteService {

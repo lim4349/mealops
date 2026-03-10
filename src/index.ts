@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { BotFrameworkAdapter, MessageFactory } from 'botbuilder';
+import { CloudAdapter, ConfigurationBotFrameworkAuthentication, MessageFactory } from 'botbuilder';
 import { CommandHandler } from './handlers/command.js';
 import { getDatabase } from './db/index.js';
 import {
@@ -69,34 +69,27 @@ const favoriteService = new FavoriteServiceImpl(
   restaurantRepo
 );
 
-// Bot Framework adapter
-const adapter = new BotFrameworkAdapter({
-  appId: process.env.MICROSOFT_APP_ID ?? '',
-  appPassword: process.env.MICROSOFT_APP_PASSWORD ?? '',
+// CloudAdapter with SingleTenant authentication (한국 리전 Single-Tenant 봇)
+const auth = new ConfigurationBotFrameworkAuthentication({
+  MicrosoftAppId: process.env.MICROSOFT_APP_ID ?? '',
+  MicrosoftAppPassword: process.env.MICROSOFT_APP_PASSWORD ?? '',
+  MicrosoftAppType: 'SingleTenant',
+  MicrosoftAppTenantId: process.env.MICROSOFT_APP_TENANT_ID ?? '',
 });
+
+const adapter = new CloudAdapter(auth);
 
 // Error handler
 adapter.onTurnError = async (context, error) => {
   const errorMsg = error instanceof Error ? error.message : String(error);
-
-  // Log detailed error info
   console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.error('❌ Bot Framework Error:');
-  console.error(`   Type: ${error?.constructor?.name || 'Unknown'}`);
-  console.error(`   Message: ${errorMsg}`);
-  if (errorMsg.includes('Authorization') || errorMsg.includes('401')) {
-    console.error('   Status: Azure Bot Service 인증 실패');
-    console.error('   Action: MICROSOFT_APP_ID/PASSWORD 확인 필요');
-  }
+  console.error('❌ Bot Error:', errorMsg);
   console.error('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
   try {
-    // Only try to send activity if there's a valid context
     if (context && context.activity) {
       await context.sendActivity('일시적인 오류입니다. 잠시 후 다시 시도해주세요.');
     }
   } catch (sendErr) {
-    // If send fails, just log it - don't crash
     console.error('Failed to send error message:', sendErr instanceof Error ? sendErr.message : sendErr);
   }
 };
@@ -162,20 +155,24 @@ app.get('/health', (req, res) => {
 });
 
 // Bot Framework endpoint
-app.post('/api/messages', (req, res) => {
-  adapter.processActivity(req, res, async (context) => {
-    // Handle Adaptive Card actions
-    if (context.activity.type === 'invoke' && context.activity.name === 'adaptiveCard/action') {
-      const response = await (bot as any).handleCardAction(context, context.activity.value);
-      res.json(response);
+app.post('/api/messages', async (req, res) => {
+  await adapter.process(req, res, async (context) => {
+    const act = context.activity;
+    console.log(`[Activity] type=${act.type} name=${act.name ?? '-'} text="${act.text ?? ''}" from=${act.from?.name ?? act.from?.id ?? '-'}`);
+
+    // Handle Adaptive Card actions - CloudAdapter는 invokeResponse로 응답
+    if (act.type === 'invoke' && act.name === 'adaptiveCard/action') {
+      const response = await (bot as any).handleCardAction(context, act.value);
+      await context.sendActivity({
+        type: 'invokeResponse',
+        value: {
+          status: response.statusCode ?? 200,
+          body: response,
+        },
+      });
       return;
     }
     await bot.run(context);
-  }).catch((err: Error) => {
-    console.error('processActivity error (non-fatal):', err.message);
-    if (!res.headersSent) {
-      res.status(500).send();
-    }
   });
 });
 

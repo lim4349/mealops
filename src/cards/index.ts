@@ -72,7 +72,70 @@ export function buildMainMenuCard(weather?: WeatherInfo): Attachment {
   });
 }
 
-// Vote card - 투표 UI/UX 개선 (색상·강조 차별화)
+// 투표 카드 한 행 헬퍼 (득표수 뱃지 + 이름/정보 + 명시적 버튼)
+function buildVoteRow(
+  verb: string,
+  data: any,
+  nameText: string,
+  subItems: any[],
+  count: number,
+  isSelected: boolean,
+  textColor: string
+): any {
+  return {
+    type: 'ColumnSet',
+    spacing: 'small',
+    columns: [
+      // 좌: 득표수 뱃지
+      {
+        type: 'Column',
+        width: 'auto',
+        verticalContentAlignment: 'center',
+        items: [{
+          type: 'TextBlock',
+          text: count > 0 ? `${count}표` : '  ',
+          weight: 'bolder',
+          color: count > 0 ? 'accent' : 'default',
+          size: 'medium',
+          horizontalAlignment: 'center',
+        }],
+      },
+      // 중: 식당명 + 부가정보
+      {
+        type: 'Column',
+        width: 'stretch',
+        verticalContentAlignment: 'center',
+        items: [
+          {
+            type: 'TextBlock',
+            text: nameText,
+            weight: isSelected ? 'bolder' : 'default',
+            color: textColor,
+            wrap: true,
+          },
+          ...subItems,
+        ],
+      },
+      // 우: 투표 버튼 (ActionSet → Teams에서 실제 버튼으로 렌더링)
+      {
+        type: 'Column',
+        width: 'auto',
+        verticalContentAlignment: 'center',
+        items: [{
+          type: 'ActionSet',
+          actions: [{
+            type: 'Action.Execute',
+            verb,
+            title: isSelected ? '✅ 취소' : '🗳️ 투표',
+            data,
+          }],
+        }],
+      },
+    ],
+  };
+}
+
+// Vote card - 투표 UI 개선: 득표수 뱃지 + 명시적 버튼
 export function buildVoteCard(
   restaurants: Restaurant[],
   voteResults: VoteResult[],
@@ -93,21 +156,29 @@ export function buildVoteCard(
   const globalBlackSet = new Set(globalBlacklistedIds || []);
 
   const stats = `👥 ${uniqueVoterCount || 0}명 참여  ·  🍱 혼밥 ${soloCount}명  ·  🎲 아무거나 ${anyCount || 0}명`;
-  const deliveryLabel = deliveryMode ? ' 🛵 배달모드' : '';
 
   const body: any[] = [
     buildTopMenuActionSet(),
     {
-      type: 'TextBlock',
-      text: `🍽️ 오늘 점심 뭐먹지?${deliveryLabel}`,
-      weight: 'bolder',
-      size: 'large',
+      type: 'ColumnSet',
+      columns: [
+        {
+          type: 'Column',
+          width: 'stretch',
+          items: [{
+            type: 'TextBlock',
+            text: `🍽️ 오늘 점심 뭐먹지?${deliveryMode ? '  🛵 배달모드' : ''}`,
+            weight: 'bolder',
+            size: 'large',
+          }],
+        },
+      ],
     },
     {
       type: 'TextBlock',
       text: stats,
       wrap: true,
-      spacing: 'small',
+      spacing: 'none',
       isSubtle: true,
       size: 'small',
     },
@@ -123,159 +194,54 @@ export function buildVoteCard(
     });
   }
 
-  for (const restaurant of restaurants) {
+  // 구분선
+  body.push({ type: 'TextBlock', text: '─────────────────', isSubtle: true, spacing: 'small', size: 'small' });
+
+  // 혼밥 / 아무거나 - 최상단
+  const soloSubItems: any[] = soloVoters && soloVoters.length > 0
+    ? [{ type: 'TextBlock', text: soloVoters.map(v => v.user_name).join(', '), size: 'small', isSubtle: true, wrap: true, spacing: 'none' }]
+    : [];
+  body.push(buildVoteRow('vote_solo', {}, '🍱 혼밥', soloSubItems, soloCount, !!userIsSolo, userIsSolo ? 'good' : 'default'));
+
+  const anySubItems: any[] = anyVoters && anyVoters.length > 0
+    ? [{ type: 'TextBlock', text: anyVoters.map(v => v.user_name).join(', '), size: 'small', isSubtle: true, wrap: true, spacing: 'none' }]
+    : [];
+  body.push(buildVoteRow('vote_any', {}, '🎲 아무거나', anySubItems, anyCount || 0, !!userIsAny, userIsAny ? 'good' : 'default'));
+
+  // 구분선
+  body.push({ type: 'TextBlock', text: '─────────────────', isSubtle: true, spacing: 'small', size: 'small' });
+
+  // 식당 목록 - 득표수 내림차순 정렬
+  const sortedRestaurants = [...restaurants].sort((a, b) => {
+    const countA = voteMap.get(a.id) ?? 0;
+    const countB = voteMap.get(b.id) ?? 0;
+    return countB - countA;
+  });
+
+  for (const restaurant of sortedRestaurants) {
     const count = voteMap.get(restaurant.id) ?? 0;
     const isSelected = userVoteIds.has(restaurant.id);
     const isGlobalBlacklisted = globalBlackSet.has(restaurant.id);
     const voters = votersByRestaurant?.get(restaurant.id) || [];
     const voterNames = voters.map(v => v.user_name).join(', ');
 
-    // Color priority: blacklisted > voted > default
     const textColor = isGlobalBlacklisted ? 'attention' : (isSelected ? 'good' : 'default');
-    const countText = count > 0 ? ` (${count}표)` : '';
-    const nameText = `${restaurant.name}${restaurant.alias ? ` · ${restaurant.alias}` : ''}${countText}`;
+    const nameText = `${restaurant.name}${restaurant.alias ? ` · ${restaurant.alias}` : ''}`;
 
-    body.push({
-      type: 'ColumnSet',
-      selectAction: {
-        type: 'Action.Execute',
-        verb: 'vote',
-        data: { restaurantId: restaurant.id, restaurantName: restaurant.name },
-      },
-      columns: [
-        {
-          type: 'Column',
-          width: 'stretch',
-          items: [
-            {
-              type: 'TextBlock',
-              text: nameText,
-              weight: isSelected ? 'bolder' : 'default',
-              color: textColor,
-              wrap: true,
-            },
-            ...(isGlobalBlacklisted ? [{
-              type: 'TextBlock',
-              text: '⚠️ 누군가의 블랙리스트',
-              size: 'small',
-              color: 'attention',
-              isSubtle: true,
-              spacing: 'none',
-            }] : []),
-            ...(voterNames ? [{
-              type: 'TextBlock',
-              text: voterNames,
-              size: 'small',
-              isSubtle: true,
-              wrap: true,
-              spacing: 'none',
-            }] : []),
-          ],
-        },
-        {
-          type: 'Column',
-          width: 'auto',
-          items: [
-            {
-              type: 'TextBlock',
-              text: isSelected ? '✅' : '▶ 투표',
-              horizontalAlignment: 'right',
-              color: isSelected ? 'good' : 'accent',
-              weight: 'bolder',
-            },
-          ],
-        },
-      ],
-    });
+    const subItems: any[] = [];
+    if (isGlobalBlacklisted) {
+      subItems.push({ type: 'TextBlock', text: '⚠️ 누군가의 블랙리스트', size: 'small', color: 'attention', isSubtle: true, spacing: 'none' });
+    }
+    if (voterNames) {
+      subItems.push({ type: 'TextBlock', text: voterNames, size: 'small', isSubtle: true, wrap: true, spacing: 'none' });
+    }
+
+    body.push(buildVoteRow(
+      'vote',
+      { restaurantId: restaurant.id, restaurantName: restaurant.name },
+      nameText, subItems, count, isSelected, textColor
+    ));
   }
-
-  // 혼밥 행
-  body.push({
-    type: 'ColumnSet',
-    selectAction: {
-      type: 'Action.Execute',
-      verb: 'vote_solo',
-      data: {},
-    },
-    columns: [
-      {
-        type: 'Column',
-        width: 'stretch',
-        items: [
-          {
-            type: 'TextBlock',
-            text: `🍱 혼밥${soloCount > 0 ? ` (${soloCount}표)` : ''}`,
-            weight: userIsSolo ? 'bolder' : 'default',
-            color: userIsSolo ? 'good' : 'default',
-            wrap: true,
-          },
-          ...(soloVoters && soloVoters.length > 0 ? [{
-            type: 'TextBlock',
-            text: soloVoters.map(v => v.user_name).join(', '),
-            size: 'small',
-            isSubtle: true,
-            wrap: true,
-            spacing: 'none',
-          }] : []),
-        ],
-      },
-      {
-        type: 'Column',
-        width: 'auto',
-        items: [{
-          type: 'TextBlock',
-          text: userIsSolo ? '✅' : '▶ 투표',
-          horizontalAlignment: 'right',
-          color: userIsSolo ? 'good' : 'accent',
-          weight: 'bolder',
-        }],
-      },
-    ],
-  });
-
-  // 아무거나 행
-  body.push({
-    type: 'ColumnSet',
-    selectAction: {
-      type: 'Action.Execute',
-      verb: 'vote_any',
-      data: {},
-    },
-    columns: [
-      {
-        type: 'Column',
-        width: 'stretch',
-        items: [
-          {
-            type: 'TextBlock',
-            text: `🎲 아무거나${(anyCount || 0) > 0 ? ` (${anyCount}표)` : ''}`,
-            weight: userIsAny ? 'bolder' : 'default',
-            color: userIsAny ? 'good' : 'default',
-            wrap: true,
-          },
-          ...(anyVoters && anyVoters.length > 0 ? [{
-            type: 'TextBlock',
-            text: anyVoters.map(v => v.user_name).join(', '),
-            size: 'small',
-            isSubtle: true,
-            wrap: true,
-            spacing: 'none',
-          }] : []),
-        ],
-      },
-      {
-        type: 'Column',
-        width: 'auto',
-        items: [{
-          type: 'TextBlock',
-          text: userIsAny ? '✅' : '▶ 투표',
-          horizontalAlignment: 'right',
-          color: userIsAny ? 'good' : 'accent',
-          weight: 'bolder',
-        }],
-      },
-    ],
-  });
 
   return CardFactory.adaptiveCard({
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
@@ -285,24 +251,35 @@ export function buildVoteCard(
   });
 }
 
-// Recommendation card - 인라인 투표 버튼 + 새로고침 (블랙 버튼 제거)
+// Recommendation card - 제목 우측 새로고침 인라인 + 투표 버튼
 export function buildRecommendCard(recommendations: RecommendationResult[]): Attachment {
   const body: any[] = [
     buildTopMenuActionSet(),
+    // 제목과 새로고침 버튼을 같은 줄에 배치
     {
-      type: 'ActionSet',
-      actions: [{
-        type: 'Action.Execute',
-        verb: 'refresh_recommend',
-        title: '🔄 새로고침',
-        data: {},
-      }],
-    },
-    {
-      type: 'TextBlock',
-      text: '🤖 AI 추천 메뉴',
-      weight: 'bolder',
-      size: 'large',
+      type: 'ColumnSet',
+      columns: [
+        {
+          type: 'Column',
+          width: 'stretch',
+          verticalContentAlignment: 'center',
+          items: [{ type: 'TextBlock', text: '🤖 AI 추천 메뉴', weight: 'bolder', size: 'large' }],
+        },
+        {
+          type: 'Column',
+          width: 'auto',
+          verticalContentAlignment: 'center',
+          items: [{
+            type: 'ActionSet',
+            actions: [{
+              type: 'Action.Execute',
+              verb: 'refresh_recommend',
+              title: '🔄',
+              data: {},
+            }],
+          }],
+        },
+      ],
     },
     ...recommendations.map((r, i) => ({
       type: 'ColumnSet',
@@ -445,27 +422,41 @@ function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlac
   };
 }
 
-// List card - 정렬 버튼 + 각 행 인라인 버튼
+export type SortKey = { field: 'name' | 'distance' | 'price'; order: 'asc' | 'desc' };
+
+// List card - 복수 정렬 + 카테고리 그룹핑 + 각 행 인라인 버튼
 export function buildListCard(
   restaurants: Restaurant[],
   blacklistedIds: number[] = [],
-  sortBy: 'default' | 'name' | 'distance' | 'price' | 'category' = 'default',
-  sortOrder: 'asc' | 'desc' = 'asc',
+  sortKeys: SortKey[] = [],
+  groupByCategory: boolean = false,
   userBlacklistedIds: number[] = []
 ): Attachment {
   const userBlackSet = new Set(userBlacklistedIds);
   const globalBlackSet = new Set(blacklistedIds);
 
-  function sortLabel(btn: 'name' | 'distance' | 'price', base: string): string {
-    if (sortBy === btn) return sortOrder === 'asc' ? `${base} ▲` : `${base} ▼`;
-    return base;
-  }
-  function nextSort(btn: 'name' | 'distance' | 'price'): { sortBy: string; sortOrder: string } {
-    if (sortBy === btn) {
-      return sortOrder === 'asc' ? { sortBy: btn, sortOrder: 'desc' } : { sortBy: 'default', sortOrder: 'asc' };
+  // 정렬 버튼 상태 계산
+  const PRIORITY_NUM = ['①', '②', '③'];
+  function getSortButton(field: 'name' | 'distance' | 'price', baseLabel: string): { title: string; nextKeys: SortKey[] } {
+    const idx = sortKeys.findIndex(k => k.field === field);
+    if (idx === -1) {
+      // 비활성 → 클릭 시 마지막에 asc 추가
+      return { title: baseLabel, nextKeys: [...sortKeys, { field, order: 'asc' }] };
     }
-    return { sortBy: btn, sortOrder: 'asc' };
+    const priority = PRIORITY_NUM[idx] ?? `${idx + 1}`;
+    if (sortKeys[idx].order === 'asc') {
+      // 오름차순 활성 → 클릭 시 내림차순
+      const next = sortKeys.map((k, i) => i === idx ? { ...k, order: 'desc' as const } : k);
+      return { title: `${baseLabel}${priority}▲`, nextKeys: next };
+    } else {
+      // 내림차순 활성 → 클릭 시 제거 (뒤 항목 우선순위 당김)
+      return { title: `${baseLabel}${priority}▼`, nextKeys: sortKeys.filter((_, i) => i !== idx) };
+    }
   }
+
+  const nameSortBtn    = getSortButton('name',     '가나다');
+  const distSortBtn    = getSortButton('distance', '거리');
+  const priceSortBtn   = getSortButton('price',    '가격');
 
   const body: any[] = [
     buildTopMenuActionSet(),
@@ -478,73 +469,67 @@ export function buildListCard(
     {
       type: 'ActionSet',
       actions: [
-        { type: 'Action.Execute', verb: 'sort_list', title: sortLabel('name', '가나다'),   data: nextSort('name') },
-        { type: 'Action.Execute', verb: 'sort_list', title: sortLabel('distance', '거리'), data: nextSort('distance') },
-        { type: 'Action.Execute', verb: 'sort_list', title: sortLabel('price', '가격'),    data: nextSort('price') },
+        { type: 'Action.Execute', verb: 'sort_list', title: nameSortBtn.title,  data: { sortKeys: nameSortBtn.nextKeys,  groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: distSortBtn.title,  data: { sortKeys: distSortBtn.nextKeys,  groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: priceSortBtn.title, data: { sortKeys: priceSortBtn.nextKeys, groupByCategory } },
         {
           type: 'Action.Execute', verb: 'sort_list',
-          title: sortBy === 'category' ? '종류 ✓' : '종류',
-          data: sortBy === 'category' ? { sortBy: 'default', sortOrder: 'asc' } : { sortBy: 'category', sortOrder: 'asc' },
+          title: groupByCategory ? '종류 ✓' : '종류',
+          data: { sortKeys, groupByCategory: !groupByCategory },
         },
         { type: 'Action.Execute', verb: 'add_restaurant_form', title: '➕ 식당추가', data: {} },
       ],
     },
   ];
 
-  // 카테고리별 보기
-  if (sortBy === 'category') {
-    const grouped = restaurants.reduce((acc, r) => {
+  // 정렬 적용
+  let sorted = [...restaurants];
+  if (sortKeys.length > 0) {
+    sorted.sort((a, b) => {
+      for (const key of sortKeys) {
+        let cmp = 0;
+        if (key.field === 'name')     cmp = a.name.localeCompare(b.name, 'ko');
+        else if (key.field === 'distance') cmp = a.distance - b.distance;
+        else if (key.field === 'price')    cmp = a.price - b.price;
+        if (cmp !== 0) return key.order === 'asc' ? cmp : -cmp;
+      }
+      return 0;
+    });
+  } else {
+    sorted.sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+  }
+
+  // 카테고리 그룹핑 뷰
+  if (groupByCategory) {
+    const grouped = sorted.reduce((acc, r) => {
       if (!acc[r.category]) acc[r.category] = [];
       acc[r.category].push(r);
       return acc;
     }, {} as Record<string, Restaurant[]>);
 
-    const categoryOrder = ['한식', '중식', '일식', '양식', '분식', '기타'];
-    const sortedCategories = categoryOrder.filter(c => grouped[c]);
-    // 혹시 모르는 카테고리도 포함
-    Object.keys(grouped).forEach(c => { if (!sortedCategories.includes(c)) sortedCategories.push(c); });
+    const ORDER = ['한식', '중식', '일식', '양식', '분식', '기타'];
+    const cats = ORDER.filter(c => grouped[c]);
+    Object.keys(grouped).forEach(c => { if (!cats.includes(c)) cats.push(c); });
 
-    for (const category of sortedCategories) {
+    for (const cat of cats) {
       body.push({
         type: 'TextBlock',
-        text: `**${category}** (${grouped[category].length}개)`,
+        text: `**${cat}** (${grouped[cat].length}개)`,
         weight: 'bolder',
         spacing: 'medium',
         color: 'accent',
       });
-      const catSorted = [...grouped[category]].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
-      for (const r of catSorted) {
+      for (const r of grouped[cat]) {
         body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet));
       }
     }
-
-    if (restaurants.length === 0) {
-      body.push({ type: 'TextBlock', text: '등록된 식당이 없습니다.', isSubtle: true, wrap: true });
+  } else {
+    for (const r of sorted) {
+      body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet));
     }
-
-    return CardFactory.adaptiveCard({
-      $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
-      type: 'AdaptiveCard',
-      version: '1.4',
-      body,
-    });
   }
 
-  // 일반 정렬
-  let sorted: Restaurant[];
-  switch (sortBy) {
-    case 'name':     sorted = [...restaurants].sort((a, b) => a.name.localeCompare(b.name, 'ko')); break;
-    case 'distance': sorted = [...restaurants].sort((a, b) => a.distance - b.distance); break;
-    case 'price':    sorted = [...restaurants].sort((a, b) => a.price - b.price); break;
-    default:         sorted = [...restaurants].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
-  }
-  if (sortOrder === 'desc') sorted = sorted.reverse();
-
-  for (const r of sorted) {
-    body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet));
-  }
-
-  if (sorted.length === 0) {
+  if (restaurants.length === 0) {
     body.push({ type: 'TextBlock', text: '등록된 식당이 없습니다.', isSubtle: true, wrap: true });
   }
 
@@ -764,27 +749,141 @@ export function buildSettingsCard(budget: number, forceEnabled: boolean, deliver
   });
 }
 
+function buildWeatherLabel(temp?: number | null, condition?: string | null): string {
+  if (temp == null && !condition) return '';
+  const emoji =
+    condition === 'rain'   ? '🌧️' :
+    condition === 'snow'   ? '❄️' :
+    condition === 'clouds' ? '☁️' : '☀️';
+  const parts: string[] = [];
+  if (temp != null) parts.push(`${temp}°C`);
+  if (condition)    parts.push(condition === 'rain' ? '비' : condition === 'snow' ? '눈' : condition === 'clouds' ? '흐림' : '맑음');
+  return `${emoji} ${parts.join(', ')}`;
+}
+
 // Dashboard/History card
+function getWeekOfMonth(date: Date): number {
+  const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
+  return Math.ceil((date.getDate() + firstDay.getDay()) / 7);
+}
+
 export function buildDashboardCard(
   history: SelectedHistory[],
-  restaurantRepo: RestaurantRepository
+  restaurantRepo: RestaurantRepository,
+  view: 'week' | 'month' = 'week'
 ): Attachment {
-  if (history.length === 0) {
-    return buildResponseCard('아직 히스토리가 없습니다.', true);
+  const today = new Date();
+  const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+
+  // 뷰에 따라 필터
+  let filtered: SelectedHistory[];
+  let title: string;
+
+  if (view === 'week') {
+    const dow = today.getDay();
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+    const mondayStr = monday.toISOString().split('T')[0];
+    filtered = history.filter(h => h.selected_date >= mondayStr);
+    title = '📊 이번 주 점심';
+  } else {
+    const monthPrefix = today.toISOString().slice(0, 7); // YYYY-MM
+    filtered = history.filter(h => h.selected_date.startsWith(monthPrefix));
+    title = `📊 ${today.getMonth() + 1}월 점심`;
   }
 
   const body: any[] = [
     buildTopMenuActionSet(),
-    { type: 'TextBlock', text: '📊 최근 7일 점심 히스토리', weight: 'bolder', size: 'large' },
+    {
+      type: 'ActionSet',
+      actions: [
+        { type: 'Action.Execute', verb: 'dashboard_view', title: view === 'week' ? '주간 ✓' : '주간', data: { view: 'week' } },
+        { type: 'Action.Execute', verb: 'dashboard_view', title: view === 'month' ? '월간 ✓' : '월간', data: { view: 'month' } },
+      ],
+    },
+    { type: 'TextBlock', text: title, weight: 'bolder', size: 'large', spacing: 'small' },
   ];
 
-  for (const h of history) {
-    const restaurant = restaurantRepo.findById(h.restaurant_id);
-    body.push({
-      type: 'TextBlock',
-      text: `• ${h.selected_date}: ${restaurant?.name ?? '알 수 없음'} (${h.vote_count}표)`,
-      wrap: true,
-    });
+  if (filtered.length === 0) {
+    body.push({ type: 'TextBlock', text: '아직 기록이 없습니다.', isSubtle: true, spacing: 'medium' });
+  } else if (view === 'week') {
+    // 주간: 날짜별 목록
+    const sorted = [...filtered].sort((a, b) => a.selected_date.localeCompare(b.selected_date));
+    for (const h of sorted) {
+      const restaurant = restaurantRepo.findById(h.restaurant_id);
+      const d = new Date(h.selected_date + 'T00:00:00');
+      const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
+      const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
+      body.push({
+        type: 'ColumnSet',
+        spacing: 'small',
+        columns: [
+          { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small' }] },
+          { type: 'Column', width: 'stretch', items: [
+            { type: 'TextBlock', text: restaurant?.name ?? '알 수 없음', weight: 'bolder' },
+            ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
+          ]},
+          { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: `${h.vote_count}표`, color: 'accent', isSubtle: true }] },
+        ],
+      });
+    }
+  } else {
+    // 월간: 단골 TOP3 + 주차별 상세
+    const counts = new Map<number, { name: string; count: number }>();
+    for (const h of filtered) {
+      const r = restaurantRepo.findById(h.restaurant_id);
+      if (r) {
+        const ex = counts.get(h.restaurant_id);
+        if (ex) ex.count++;
+        else counts.set(h.restaurant_id, { name: r.name, count: 1 });
+      }
+    }
+    const topPicks = Array.from(counts.values()).sort((a, b) => b.count - a.count).slice(0, 3);
+
+    body.push({ type: 'TextBlock', text: `총 ${filtered.length}일 기록`, isSubtle: true, spacing: 'small', size: 'small' });
+
+    if (topPicks.length > 0) {
+      body.push({ type: 'TextBlock', text: '🏆 이달의 단골', weight: 'bolder', spacing: 'medium' });
+      ['🥇', '🥈', '🥉'].slice(0, topPicks.length).forEach((medal, i) => {
+        body.push({
+          type: 'ColumnSet',
+          spacing: 'small',
+          columns: [
+            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: medal }] },
+            { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: topPicks[i].name, weight: 'bolder' }] },
+            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: `${topPicks[i].count}회`, color: 'accent', weight: 'bolder' }] },
+          ],
+        });
+      });
+    }
+
+    // 주차별 상세
+    body.push({ type: 'TextBlock', text: '📋 상세 기록', weight: 'bolder', spacing: 'medium' });
+    const sorted = [...filtered].sort((a, b) => a.selected_date.localeCompare(b.selected_date));
+    let currentWeek = -1;
+    for (const h of sorted) {
+      const d = new Date(h.selected_date + 'T00:00:00');
+      const week = getWeekOfMonth(d);
+      if (week !== currentWeek) {
+        body.push({ type: 'TextBlock', text: `${week}주차`, weight: 'bolder', color: 'accent', spacing: 'small', size: 'small' });
+        currentWeek = week;
+      }
+      const restaurant = restaurantRepo.findById(h.restaurant_id);
+      const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
+      const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
+      body.push({
+        type: 'ColumnSet',
+        spacing: 'small',
+        columns: [
+          { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small' }] },
+          { type: 'Column', width: 'stretch', items: [
+            { type: 'TextBlock', text: restaurant?.name ?? '알 수 없음' },
+            ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
+          ]},
+          { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: `${h.vote_count}표`, isSubtle: true, color: 'accent', size: 'small' }] },
+        ],
+      });
+    }
   }
 
   return CardFactory.adaptiveCard({
