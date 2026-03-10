@@ -194,6 +194,15 @@ export function buildVoteCard(
     });
   }
 
+  // 메뉴 결정 버튼
+  body.push({
+    type: 'ActionSet',
+    spacing: 'small',
+    actions: [
+      { type: 'Action.Execute', verb: 'decide_now', title: '⏰ 오늘 메뉴 결정!', data: {} },
+    ],
+  });
+
   // 구분선
   body.push({ type: 'TextBlock', text: '─────────────────', isSubtle: true, spacing: 'small', size: 'small' });
 
@@ -403,17 +412,15 @@ function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlac
       {
         type: 'Column',
         width: 'auto',
-        items: [{ type: 'ActionSet', actions: [{ type: 'Action.Execute', verb: 'blacklist_toggle', title: isUserBlacklisted ? '🚫✓' : '🚫', data: { restaurantId: r.id, restaurantName: r.name } }] }],
-      },
-      {
-        type: 'Column',
-        width: 'auto',
-        items: [{ type: 'ActionSet', actions: [{ type: 'Action.Execute', verb: 'edit_restaurant', title: '✏️', data: { restaurantId: r.id } }] }],
-      },
-      {
-        type: 'Column',
-        width: 'auto',
-        items: [{ type: 'ActionSet', actions: [{ type: 'Action.Execute', verb: 'delete_restaurant', title: '🗑️', data: { restaurantId: r.id, restaurantName: r.name } }] }],
+        verticalContentAlignment: 'center',
+        items: [{
+          type: 'ActionSet',
+          actions: [
+            { type: 'Action.Execute', verb: 'blacklist_toggle', title: isUserBlacklisted ? '🚫✓' : '🚫', data: { restaurantId: r.id, restaurantName: r.name } },
+            { type: 'Action.Execute', verb: 'edit_restaurant',  title: '✏️', data: { restaurantId: r.id } },
+            { type: 'Action.Execute', verb: 'delete_restaurant', title: '🗑️', data: { restaurantId: r.id, restaurantName: r.name } },
+          ],
+        }],
       },
     ],
   };

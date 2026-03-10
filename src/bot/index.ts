@@ -324,6 +324,31 @@ export class MeaLOpsBot extends ActivityHandler {
           return this.cardResponse(this.buildVoteCardForToday(userId));
         }
 
+        case 'decide_now': {
+          // 이미 오늘 결정된 경우 체크
+          const existingHistory = this.deps.historyRepo.findByDate(today);
+          if (existingHistory) {
+            const existingRestaurant = this.deps.restaurantRepo.findById(existingHistory.restaurant_id);
+            return this.cardResponse(buildResponseCard(`✅ 오늘은 이미 **${existingRestaurant?.name ?? '알 수 없음'}**으로 결정되었습니다!`, true));
+          }
+          const result = this.deps.voteService.decideWinner(today);
+          if (result.success && result.data) {
+            const restaurant = this.deps.restaurantRepo.findByName(result.data.restaurant);
+            if (restaurant) {
+              const voteResults = this.deps.voteService.getResults(today);
+              const totalVotes = voteResults.reduce((sum, r) => sum + r.count, 0);
+              try {
+                const weather = await this.deps.weatherService.getCurrent();
+                this.deps.historyRepo.add(restaurant.id, today, totalVotes, weather.temp, weather.condition);
+              } catch {
+                this.deps.historyRepo.add(restaurant.id, today, totalVotes);
+              }
+            }
+            return this.cardResponse(buildResponseCard(`🍽️ ${result.message}\n\n13:30에 리뷰 알림이 발송됩니다.`, true));
+          }
+          return this.cardResponse(buildResponseCard(result.message, true));
+        }
+
         case 'dashboard': {
           const history = this.deps.historyRepo.findRecent(90);
           return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week'));
