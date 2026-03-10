@@ -11,16 +11,22 @@ NGROK_DOMAIN="janella-interjugular-topographically.ngrok-free.dev"
 
 # 함수: 서버 시작
 start_server() {
-  # DB 파일이 git 버전과 다른 경우 경고 (이전에 gitignore 상태에서 생성된 빈 DB일 수 있음)
-  if [ -f "data/lunch.db" ]; then
-    GIT_DB_SIZE=$(git show HEAD:data/lunch.db 2>/dev/null | wc -c)
-    LOCAL_DB_SIZE=$(wc -c < "data/lunch.db")
-    if [ "$GIT_DB_SIZE" -gt 0 ] && [ "$LOCAL_DB_SIZE" -lt "$GIT_DB_SIZE" ]; then
-      echo "⚠️  로컬 DB(${LOCAL_DB_SIZE}B)가 git DB(${GIT_DB_SIZE}B)보다 작습니다."
-      echo "   식당 데이터가 없을 수 있습니다. git 버전으로 교체합니다..."
-      rm -f data/lunch.db data/lunch.db-shm data/lunch.db-wal
+  # DB 파일 확인: 없거나 git 버전보다 작으면 git에서 복원
+  GIT_DB_SIZE=$(git show HEAD:data/lunch.db 2>/dev/null | wc -c)
+  if [ "$GIT_DB_SIZE" -gt 0 ]; then
+    if [ ! -f "data/lunch.db" ]; then
+      echo "⚠️  data/lunch.db 없음. git에서 복원합니다..."
+      mkdir -p data
       git checkout HEAD -- data/lunch.db
       echo "✅ DB 복원 완료"
+    else
+      LOCAL_DB_SIZE=$(wc -c < "data/lunch.db")
+      if [ "$LOCAL_DB_SIZE" -lt "$GIT_DB_SIZE" ]; then
+        echo "⚠️  로컬 DB(${LOCAL_DB_SIZE}B)가 git DB(${GIT_DB_SIZE}B)보다 작습니다. git 버전으로 교체합니다..."
+        rm -f data/lunch.db data/lunch.db-shm data/lunch.db-wal
+        git checkout HEAD -- data/lunch.db
+        echo "✅ DB 복원 완료"
+      fi
     fi
   fi
 
