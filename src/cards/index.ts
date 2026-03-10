@@ -818,9 +818,10 @@ export function buildDashboardCard(
       const d = new Date(h.selected_date + 'T00:00:00');
       const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
       const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
+      const restaurantName = restaurant?.name ?? '알 수 없음';
       const infoItems: any[] = [
         { type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small', spacing: 'none' },
-        { type: 'TextBlock', text: restaurant?.name ?? '알 수 없음', weight: 'bolder', spacing: 'none' },
+        { type: 'TextBlock', text: restaurantName, weight: 'bolder', spacing: 'none' },
         ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
       ];
       body.push({
@@ -828,7 +829,13 @@ export function buildDashboardCard(
         spacing: 'small',
         columns: [
           { type: 'Column', width: 'stretch', items: infoItems },
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{ type: 'TextBlock', text: `${h.vote_count}표`, color: 'accent', isSubtle: true }] },
+          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [
+            { type: 'TextBlock', text: `${h.vote_count}표`, color: 'accent', isSubtle: true },
+          ]},
+          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
+            type: 'ActionSet',
+            actions: [{ type: 'Action.Execute', verb: 'show_review', title: '⭐', data: { restaurantName } }],
+          }]},
         ],
       });
     }
@@ -876,9 +883,10 @@ export function buildDashboardCard(
       const restaurant = restaurantRepo.findById(h.restaurant_id);
       const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
       const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
+      const restaurantName2 = restaurant?.name ?? '알 수 없음';
       const infoItems: any[] = [
         { type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small', spacing: 'none' },
-        { type: 'TextBlock', text: restaurant?.name ?? '알 수 없음', spacing: 'none' },
+        { type: 'TextBlock', text: restaurantName2, spacing: 'none' },
         ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
       ];
       body.push({
@@ -886,7 +894,13 @@ export function buildDashboardCard(
         spacing: 'small',
         columns: [
           { type: 'Column', width: 'stretch', items: infoItems },
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{ type: 'TextBlock', text: `${h.vote_count}표`, isSubtle: true, color: 'accent', size: 'small' }] },
+          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [
+            { type: 'TextBlock', text: `${h.vote_count}표`, isSubtle: true, color: 'accent', size: 'small' },
+          ]},
+          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
+            type: 'ActionSet',
+            actions: [{ type: 'Action.Execute', verb: 'show_review', title: '⭐', data: { restaurantName: restaurantName2 } }],
+          }]},
         ],
       });
     }

@@ -360,6 +360,11 @@ export class MeaLOpsBot extends ActivityHandler {
           return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view));
         }
 
+        case 'show_review': {
+          const { restaurantName } = data;
+          return this.cardResponse(buildReviewCard(restaurantName));
+        }
+
         case 'review': {
           const { restaurantName, rating } = data;
           const restaurant = this.deps.restaurantRepo.findByName(restaurantName);
