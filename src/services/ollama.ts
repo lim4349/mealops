@@ -20,11 +20,13 @@ export class OllamaServiceImpl implements OllamaService {
         stream: false,
         options: {
           temperature: 0.7,
-          num_predict: 300,
+          num_predict: 500,
         },
       }, { timeout: 30000 });
 
-      return this.parseResponse(response.data.response);
+      const raw = response.data.response;
+      console.log(`[Ollama] 응답 원문: ${raw.slice(0, 300)}`);
+      return this.parseResponse(raw);
     } catch (error) {
       console.error('Ollama error:', error);
       // Fallback to simple recommendations
@@ -87,23 +89,26 @@ export class OllamaServiceImpl implements OllamaService {
   }
 
   private getFallbackRecommendations(context: RecommendationContext): RecommendationResult[] {
-    // Simple fallback based on weather
-    const isCold = context.weather.temp < 10 || context.weather.condition.includes('rain');
+    const isCold = context.weather.temp < 10 || context.weather.condition.toLowerCase().includes('rain') || context.weather.condition.toLowerCase().includes('snow');
     const isHot = context.weather.temp > 25;
 
-    const recommendations: RecommendationResult[] = [];
+    const reasonByCondition = isCold
+      ? '추운 날 따뜻한 메뉴'
+      : isHot
+      ? '더운 날 시원한 메뉴'
+      : '오늘 날씨에 어울리는 메뉴';
 
-    if (isCold) {
-      recommendations.push({ name: '본죽', reason: '추운 날 따뜻한 죽이 최고입니다' });
-      recommendations.push({ name: '서가앤쿡', reason: '따뜻한 한식 한그릇' });
-    } else if (isHot) {
-      recommendations.push({ name: '국수나무', reason: '더운 날 시원한 국수' });
-      recommendations.push({ name: '미스터피자', reason: '에어컨 빵빵한 양식' });
-    } else {
-      recommendations.push({ name: '빕스', reason: '적당한 날씨에 좋은 양식' });
+    // Shuffle available restaurants and return up to 5
+    const available = [...context.availableRestaurants];
+    for (let i = available.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [available[i], available[j]] = [available[j], available[i]];
     }
 
-    return recommendations.slice(0, 5);
+    return available.slice(0, 5).map(r => ({
+      name: r.name,
+      reason: `${reasonByCondition} · ${r.category} · ${r.distance}m`,
+    }));
   }
 
   async checkConnection(): Promise<boolean> {
