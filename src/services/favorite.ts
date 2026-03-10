@@ -70,24 +70,11 @@ export class FavoriteServiceImpl implements FavoriteService {
       .slice(0, 5)
       .map(v => ({ name: v.name, rating: v.rating }));
 
-    // Recent visits (from selected history)
-    const recentHistory = this.historyRepo.findRecent(10);
-    const recentVisits = recentHistory
-      .filter(h => {
-        const votes = this.voteRepo.findTodayVotes(h.selected_date);
-        return votes.some(v => v.user_id === user.id);
-      })
-      .map(h => {
-        const restaurant = this.restaurantRepo.findById(h.restaurant_id);
-        return { name: restaurant?.name ?? '알 수 없음', date: h.selected_date };
-      })
-      .slice(0, 5);
-
     return {
       user_name: user.name,
       most_visited: mostVisited,
       highest_rated: highestRated,
-      recent_visits: recentVisits,
+      recent_visits: [],
     };
   }
 }

@@ -445,11 +445,7 @@ export class MeaLOpsBot extends ActivityHandler {
       stats.highest_rated.forEach((v: any) => { message += `• ${v.name} (${v.rating}점)\n`; });
       message += '\n';
     }
-    if (stats.recent_visits.length > 0) {
-      message += `**🕐 최근 방문**\n`;
-      stats.recent_visits.forEach((v: any) => { message += `• ${v.name} (${v.date})\n`; });
-    }
-    if (!stats.most_visited.length && !stats.highest_rated.length && !stats.recent_visits.length) {
+    if (!stats.most_visited.length && !stats.highest_rated.length) {
       message += '아직 데이터가 없습니다. 투표하고 리뷰를 남겨보세요!';
     }
     return message;
