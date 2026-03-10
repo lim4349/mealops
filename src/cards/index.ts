@@ -368,13 +368,10 @@ export function buildResponseCard(message: string, showBack?: boolean): Attachme
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     type: 'AdaptiveCard',
     version: '1.4',
-    body: [{ type: 'TextBlock', text: message, wrap: true }],
-    actions: showBack ? [{
-      type: 'Action.Execute',
-      verb: 'main_menu',
-      title: '🏠 메뉴로',
-      data: {},
-    }] : [],
+    body: [
+      ...(showBack ? [buildTopMenuActionSet()] : []),
+      { type: 'TextBlock', text: message, wrap: true },
+    ],
   });
 }
 
