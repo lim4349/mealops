@@ -72,6 +72,8 @@ export class RecommendationServiceImpl implements RecommendationService {
     );
     const availableNames = new Set(availableRestaurants.map(r => r.name));
 
+    console.log(`[Recommend] available=${availableRestaurants.length}개, blacklisted=${blacklistedNames.length}개, recent=${recentVisits.join(',')}, lowRated=${lowRatedIds.size}개`);
+
     try {
       const recommendations = await this.ollamaService.recommend({
         weather,
@@ -90,9 +92,11 @@ export class RecommendationServiceImpl implements RecommendationService {
 
       // DB에 존재하는 식당만 필터링
       const validRecommendations = recommendations.filter(r => availableNames.has(r.name));
+      console.log(`[Recommend] Ollama 결과=${recommendations.length}개, 유효=${validRecommendations.length}개, Ollama반환:${recommendations.map(r=>r.name).join(',')}`);
 
       // If no valid recommendations, return fallback
       if (validRecommendations.length === 0) {
+        console.log('[Recommend] → fallback 사용');
         return this.getFallbackRecommendations(weather, allRestaurants, blacklistedNames, recentVisits);
       }
 
