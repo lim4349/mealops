@@ -201,6 +201,8 @@ export interface ReviewRepository {
   create(review: Omit<Review, 'id' | 'created_at'>): Review;
   findByRestaurant(restaurantId: number): Review[];
   findByUser(userId: string): Review[];
+  findByUserAndRestaurantAndDate(userId: string, restaurantId: number, visitDate: string): Review | undefined;
+  updateRating(userId: string, restaurantId: number, visitDate: string, rating: number): void;
   getAverageRating(restaurantId: number): number;
 }
 

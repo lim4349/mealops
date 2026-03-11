@@ -369,13 +369,20 @@ export class MeaLOpsBot extends ActivityHandler {
           const { restaurantName, rating } = data;
           const restaurant = this.deps.restaurantRepo.findByName(restaurantName);
           if (restaurant) {
-            this.deps.reviewRepo.create({
-              user_id: userId,
-              restaurant_id: restaurant.id,
-              rating,
-              visit_date: today,
-              comment: undefined,
-            });
+            const existing = this.deps.reviewRepo.findByUserAndRestaurantAndDate(userId, restaurant.id, today);
+            if (existing) {
+              // 기존 리뷰 업데이트
+              this.deps.reviewRepo.updateRating(userId, restaurant.id, today, rating);
+            } else {
+              // 새 리뷰 생성
+              this.deps.reviewRepo.create({
+                user_id: userId,
+                restaurant_id: restaurant.id,
+                rating,
+                visit_date: today,
+                comment: undefined,
+              });
+            }
           }
           return this.cardResponse(buildResponseCard(`⭐ '${restaurantName}'에 ${rating}점 리뷰가 등록되었습니다!`, true));
         }

@@ -338,6 +338,20 @@ export class ReviewRepositoryImpl implements ReviewRepository {
     return created[created.length - 1];
   }
 
+  findByUserAndRestaurantAndDate(userId: string, restaurantId: number, visitDate: string): Review | undefined {
+    return this.db.get<Review>(
+      'SELECT * FROM reviews WHERE user_id = ? AND restaurant_id = ? AND visit_date = ?',
+      [userId, restaurantId, visitDate]
+    );
+  }
+
+  updateRating(userId: string, restaurantId: number, visitDate: string, rating: number): void {
+    this.db.run(
+      'UPDATE reviews SET rating = ? WHERE user_id = ? AND restaurant_id = ? AND visit_date = ?',
+      [rating, userId, restaurantId, visitDate]
+    );
+  }
+
   findByRestaurant(restaurantId: number): Review[] {
     return this.db.all<Review>(
       'SELECT * FROM reviews WHERE restaurant_id = ? ORDER BY created_at DESC',
