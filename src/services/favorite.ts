@@ -41,18 +41,34 @@ export class FavoriteServiceImpl implements FavoriteService {
     // Get user's reviews
     const reviews = this.reviewRepo.findByUser(user.id);
 
+    // Group reviews by visit_date and restaurant to avoid counting multiple reviews from same day
+    const visitsByRestaurantDate = new Map<string, Map<number, number>>();
+    const restaurantRatings = new Map<number, number>();
+
+    for (const review of reviews) {
+      const key = `${review.restaurant_id}|${review.visit_date}`;
+      if (!visitsByRestaurantDate.has(key)) {
+        visitsByRestaurantDate.set(key, new Map());
+      }
+      // Store the latest review for this restaurant on this date
+      restaurantRatings.set(review.restaurant_id, Math.max(restaurantRatings.get(review.restaurant_id) ?? 0, review.rating));
+    }
+
     // Get restaurants from reviews for visit tracking
     const restaurantVisits = new Map<number, { name: string; count: number; rating: number }>();
 
-    for (const review of reviews) {
-      const restaurant = this.restaurantRepo.findById(review.restaurant_id);
+    for (const [key] of visitsByRestaurantDate) {
+      const [restaurantIdStr, visitDate] = key.split('|');
+      const restaurantId = Number(restaurantIdStr);
+      const restaurant = this.restaurantRepo.findById(restaurantId);
       if (restaurant) {
-        const existing = restaurantVisits.get(restaurant.id);
+        const existing = restaurantVisits.get(restaurantId);
+        const rating = restaurantRatings.get(restaurantId) ?? 0;
         if (existing) {
           existing.count++;
-          existing.rating = Math.max(existing.rating, review.rating);
+          existing.rating = Math.max(existing.rating, rating);
         } else {
-          restaurantVisits.set(restaurant.id, { name: restaurant.name, count: 1, rating: review.rating });
+          restaurantVisits.set(restaurantId, { name: restaurant.name, count: 1, rating });
         }
       }
     }
