@@ -94,8 +94,39 @@ adapter.onTurnError = async (context, error) => {
   }
 };
 
-// Notification function - send to all conversation references
+// Notification function - send to channel or conversation references
 async function sendNotification(message: string, card?: any): Promise<void> {
+  const channelId = process.env.TEAMS_CHANNEL_ID;
+
+  // If channel ID is set, send to channel directly
+  if (channelId) {
+    try {
+      const tenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
+      const reference = {
+        channelId,
+        serviceUrl: 'https://smba.trafficmanager.net/apac/',
+        conversation: {
+          id: channelId,
+          isGroup: true,
+          conversationType: 'channel'
+        },
+        bot: {
+          id: process.env.MICROSOFT_APP_ID ?? '',
+          name: 'MeaLOps'
+        },
+        locale: 'ko-KR'
+      };
+
+      await adapter.continueConversation(reference, async (context) => {
+        await context.sendActivity(card ? MessageFactory.attachment(card) : message);
+      });
+      console.log('✅ Notification sent to channel');
+    } catch (error) {
+      console.error('Error sending to channel:', error);
+    }
+  }
+
+  // Also send to all stored conversation references (DMs, previous chats)
   for (const [, reference] of conversationReferences) {
     try {
       await adapter.continueConversation(reference, async (context) => {
