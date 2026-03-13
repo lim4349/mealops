@@ -107,6 +107,7 @@ async function sendNotification(message: string, card?: any): Promise<void> {
         serviceUrl: 'https://smba.trafficmanager.net/apac/',
         conversation: {
           id: channelId,
+          name: 'General',
           isGroup: true,
           conversationType: 'channel'
         },
