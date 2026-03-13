@@ -97,31 +97,30 @@ adapter.onTurnError = async (context, error) => {
 // Notification function - send to channel or conversation references
 async function sendNotification(message: string, card?: any): Promise<void> {
   const channelId = process.env.TEAMS_CHANNEL_ID;
+  const appId = process.env.MICROSOFT_APP_ID ?? '';
+  const tenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
 
   // If channel ID is set, send to channel directly
   if (channelId) {
     try {
-      const tenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
-      const reference = {
-        channelId,
-        serviceUrl: 'https://smba.trafficmanager.net/apac/',
-        conversation: {
-          id: channelId,
-          name: 'General',
+      await (adapter as any).createConversationAsync(
+        appId,
+        'msteams',
+        'https://smba.trafficmanager.net/teams/',
+        'https://api.botframework.com',
+        {
           isGroup: true,
-          conversationType: 'channel'
-        },
-        bot: {
-          id: process.env.MICROSOFT_APP_ID ?? '',
-          name: 'MeaLOps'
-        },
-        locale: 'ko-KR'
-      };
-
-      await (adapter as any).continueConversation(reference, async (context: any) => {
-        await context.sendActivity(card ? MessageFactory.attachment(card) : message);
-      });
-      console.log('✅ Notification sent to channel');
+          channelData: {
+            channel: { id: channelId },
+          },
+          activity: card ? MessageFactory.attachment(card) : MessageFactory.text(message),
+          bot: { id: appId, name: 'MeaLOps' },
+          tenantId: tenantId,
+        } as any,
+        async (turnContext: any) => {
+          console.log('✅ Notification sent to channel');
+        }
+      );
     } catch (error) {
       console.error('Error sending to channel:', error);
     }
@@ -134,7 +133,7 @@ async function sendNotification(message: string, card?: any): Promise<void> {
         await context.sendActivity(card ? MessageFactory.attachment(card) : message);
       });
     } catch (error) {
-      console.error('Error sending notification:', error);
+      console.error('Error sending to DM:', error);
     }
   }
 }
