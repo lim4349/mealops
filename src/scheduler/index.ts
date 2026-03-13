@@ -46,12 +46,14 @@ export class SchedulerImpl implements Scheduler {
 
     console.log(`⏰ Scheduler config: VOTE=${voteHour}:${voteMinute}, FORCE=${voteHour}:${forceMinute}`);
 
-    // 매초 확인
+    // 매초 확인 (KST 기반, UTC+9)
     let debugCount = 0;
     setInterval(async () => {
       const now = new Date();
-      const hour = String(now.getHours()).padStart(2, '0');
-      const minute = String(now.getMinutes()).padStart(2, '0');
+      // UTC에서 KST로 변환 (UTC + 9시간)
+      const kstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      const hour = String(kstTime.getHours()).padStart(2, '0');
+      const minute = String(kstTime.getMinutes()).padStart(2, '0');
       const hm = `${hour}:${minute}`;
 
       // 디버그: 10초마다 출력
@@ -60,20 +62,20 @@ export class SchedulerImpl implements Scheduler {
         console.log(`[DEBUG] 현재: ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteTime}`);
       }
 
-      // 투표 알림 (평일만)
-      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteTime !== hm && now.getDay() >= 1 && now.getDay() <= 5) {
+      // 투표 알림 (평일만, KST 기반)
+      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteTime !== hm && kstTime.getDay() >= 1 && kstTime.getDay() <= 5) {
         this.lastVoteTime = hm;
         console.log(`[VOTE] 스케줄 실행: ${voteHour}:${voteMinute}`);
-        if (!this.isHoliday(now)) {
+        if (!this.isHoliday(kstTime)) {
           await this.sendVoteReminder();
         }
       }
 
-      // 강제 결정 (평일만)
-      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionTime !== hm && now.getDay() >= 1 && now.getDay() <= 5) {
+      // 강제 결정 (평일만, KST 기반)
+      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionTime !== hm && kstTime.getDay() >= 1 && kstTime.getDay() <= 5) {
         this.lastDecisionTime = hm;
         console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
-        if (!this.isHoliday(now) && this.settingRepo.getForceDecisionEnabled()) {
+        if (!this.isHoliday(kstTime) && this.settingRepo.getForceDecisionEnabled()) {
           await this.makeForceDecision();
         }
       }
