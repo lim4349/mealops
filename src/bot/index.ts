@@ -73,6 +73,9 @@ export class MeaLOpsBot extends ActivityHandler {
     });
 
     this.onEvent(async (context: TurnContext, next: () => Promise<void>) => {
+      // 봇이 채널/대화에 추가될 때 conversation reference 저장
+      await this.saveConversationReference(context);
+
       if (context.activity.type === 'conversationUpdateActivity' && context.activity.membersAdded) {
         for (const member of context.activity.membersAdded) {
           if (member.id !== context.activity.recipient?.id) {
