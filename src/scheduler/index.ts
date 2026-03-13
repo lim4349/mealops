@@ -36,51 +36,50 @@ export class SchedulerImpl implements Scheduler {
     private sendNotification: (message: string, card?: Attachment) => Promise<void>
   ) {}
 
+  private lastVoteTime = '';
+  private lastDecisionTime = '';
+
   start(): void {
     const voteHour = process.env.VOTE_HOUR ?? '11';
     const voteMinute = process.env.VOTE_MINUTE ?? '00';
-    const reviewHour = process.env.REVIEW_HOUR ?? '12';
-    const reviewMinute = process.env.REVIEW_MINUTE ?? '50';
     const forceMinute = parseInt(process.env.FORCE_DECISION_MINUTE ?? '30', 10);
 
-    // Vote reminder at VOTE_HOUR:VOTE_MINUTE
-    this.voteTask = cron.schedule(`${voteMinute} ${voteHour} * * 1-5`, async () => {
-      if (this.isHoliday(new Date())) {
-        console.log('Today is holiday, skipping vote reminder');
-        return;
-      }
-      await this.sendVoteReminder();
-    }, {
-      timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
-    });
+    console.log(`⏰ Scheduler config: VOTE=${voteHour}:${voteMinute}, FORCE=${voteHour}:${forceMinute}`);
 
-    // Force decision at VOTE_HOUR:FORCE_MINUTE
-    this.decisionTask = cron.schedule(`${forceMinute} ${voteHour} * * 1-5`, async () => {
-      if (this.isHoliday(new Date())) {
-        console.log('Today is holiday, skipping force decision');
-        return;
-      }
-      if (!this.settingRepo.getForceDecisionEnabled()) {
-        console.log('Force decision is disabled');
-        return;
-      }
-      await this.makeForceDecision();
-    }, {
-      timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
-    });
+    // 매초 확인
+    let debugCount = 0;
+    setInterval(async () => {
+      const now = new Date();
+      const hour = String(now.getHours()).padStart(2, '0');
+      const minute = String(now.getMinutes()).padStart(2, '0');
+      const hm = `${hour}:${minute}`;
 
-    // Review reminder disabled
-    // this.reviewTask = cron.schedule(`${reviewMinute} ${reviewHour} * * 1-5`, async () => {
-    //   if (this.isHoliday(new Date())) {
-    //     console.log('Today is holiday, skipping review reminder');
-    //     return;
-    //   }
-    //   await this.sendReviewReminder();
-    // }, {
-    //   timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
-    // });
+      // 디버그: 10초마다 출력
+      debugCount++;
+      if (debugCount % 10 === 0) {
+        console.log(`[DEBUG] 현재: ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteTime}`);
+      }
 
-    console.log('Scheduler started');
+      // 투표 알림 (평일만)
+      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteTime !== hm && now.getDay() >= 1 && now.getDay() <= 5) {
+        this.lastVoteTime = hm;
+        console.log(`[VOTE] 스케줄 실행: ${voteHour}:${voteMinute}`);
+        if (!this.isHoliday(now)) {
+          await this.sendVoteReminder();
+        }
+      }
+
+      // 강제 결정 (평일만)
+      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionTime !== hm && now.getDay() >= 1 && now.getDay() <= 5) {
+        this.lastDecisionTime = hm;
+        console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
+        if (!this.isHoliday(now) && this.settingRepo.getForceDecisionEnabled()) {
+          await this.makeForceDecision();
+        }
+      }
+    }, 1000); // 1초마다 확인
+
+    console.log('Scheduler started (setInterval mode)');
   }
 
   stop(): void {

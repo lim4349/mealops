@@ -94,46 +94,52 @@ adapter.onTurnError = async (context, error) => {
   }
 };
 
-// Notification function - send to channel or conversation references
+// Notification function - send to group chat or conversation references
 async function sendNotification(message: string, card?: any): Promise<void> {
-  const channelId = process.env.TEAMS_CHANNEL_ID;
+  const groupChatId = process.env.TEAMS_CHANNEL_ID;
   const appId = process.env.MICROSOFT_APP_ID ?? '';
   const tenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
 
-  // If channel ID is set, send to channel directly
-  if (channelId) {
+  // If group chat ID is set, send to group chat directly
+  if (groupChatId) {
     try {
-      await (adapter as any).createConversationAsync(
-        appId,
-        'msteams',
-        'https://smba.trafficmanager.net/teams/',
-        'https://api.botframework.com',
-        {
+      const groupChatRef = {
+        channelId: 'msteams',
+        serviceUrl: 'https://smba.trafficmanager.net/teams/',
+        conversation: {
+          id: groupChatId,
           isGroup: true,
-          channelData: {
-            channel: { id: channelId },
-          },
-          activity: card ? MessageFactory.attachment(card) : MessageFactory.text(message),
-          bot: { id: appId, name: 'MeaLOps' },
+          conversationType: 'groupChat',
           tenantId: tenantId,
-        } as any,
-        async (turnContext: any) => {
-          console.log('✅ Notification sent to channel');
+          name: '',
+        },
+        bot: {
+          id: appId,
+          name: 'MeaLOps',
+        },
+      };
+
+      await (adapter as any).continueConversationAsync(
+        appId,
+        groupChatRef,
+        async (context: any) => {
+          await context.sendActivity(card ? MessageFactory.attachment(card) : message);
         }
       );
+      console.log('✅ Notification sent to group chat');
     } catch (error) {
-      console.error('Error sending to channel:', error);
+      console.error('Error sending to group chat:', error);
     }
   }
 
-  // Also send to all stored conversation references (DMs, previous chats)
+  // Also send to all stored conversation references (other chats)
   for (const [, reference] of conversationReferences) {
     try {
       await (adapter as any).continueConversation(reference, async (context: any) => {
         await context.sendActivity(card ? MessageFactory.attachment(card) : message);
       });
     } catch (error) {
-      console.error('Error sending to DM:', error);
+      console.error('Error sending to other chat:', error);
     }
   }
 }
