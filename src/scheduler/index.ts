@@ -69,16 +69,16 @@ export class SchedulerImpl implements Scheduler {
       timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
     });
 
-    // Review reminder at REVIEW_HOUR:REVIEW_MINUTE
-    this.reviewTask = cron.schedule(`${reviewMinute} ${reviewHour} * * 1-5`, async () => {
-      if (this.isHoliday(new Date())) {
-        console.log('Today is holiday, skipping review reminder');
-        return;
-      }
-      await this.sendReviewReminder();
-    }, {
-      timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
-    });
+    // Review reminder disabled
+    // this.reviewTask = cron.schedule(`${reviewMinute} ${reviewHour} * * 1-5`, async () => {
+    //   if (this.isHoliday(new Date())) {
+    //     console.log('Today is holiday, skipping review reminder');
+    //     return;
+    //   }
+    //   await this.sendReviewReminder();
+    // }, {
+    //   timezone: process.env.TIMEZONE ?? 'Asia/Seoul',
+    // });
 
     console.log('Scheduler started');
   }

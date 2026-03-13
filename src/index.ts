@@ -118,7 +118,7 @@ async function sendNotification(message: string, card?: any): Promise<void> {
         locale: 'ko-KR'
       };
 
-      await adapter.continueConversation(reference, async (context) => {
+      await (adapter as any).continueConversation(reference, async (context: any) => {
         await context.sendActivity(card ? MessageFactory.attachment(card) : message);
       });
       console.log('✅ Notification sent to channel');
@@ -130,7 +130,7 @@ async function sendNotification(message: string, card?: any): Promise<void> {
   // Also send to all stored conversation references (DMs, previous chats)
   for (const [, reference] of conversationReferences) {
     try {
-      await adapter.continueConversation(reference, async (context) => {
+      await (adapter as any).continueConversation(reference, async (context: any) => {
         await context.sendActivity(card ? MessageFactory.attachment(card) : message);
       });
     } catch (error) {
