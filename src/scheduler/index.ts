@@ -38,12 +38,13 @@ export class SchedulerImpl implements Scheduler {
 
   start(): void {
     const voteHour = process.env.VOTE_HOUR ?? '11';
+    const voteMinute = process.env.VOTE_MINUTE ?? '00';
     const reviewHour = process.env.REVIEW_HOUR ?? '12';
     const reviewMinute = process.env.REVIEW_MINUTE ?? '50';
     const forceMinute = parseInt(process.env.FORCE_DECISION_MINUTE ?? '30', 10);
 
-    // Vote reminder at VOTE_HOUR:00
-    this.voteTask = cron.schedule(`0 ${voteHour} * * 1-5`, async () => {
+    // Vote reminder at VOTE_HOUR:VOTE_MINUTE
+    this.voteTask = cron.schedule(`${voteMinute} ${voteHour} * * 1-5`, async () => {
       if (this.isHoliday(new Date())) {
         console.log('Today is holiday, skipping vote reminder');
         return;
