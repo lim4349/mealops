@@ -123,7 +123,12 @@ async function sendNotification(message: string, card?: any): Promise<void> {
         appId,
         groupChatRef,
         async (context: any) => {
-          await context.sendActivity(card ? MessageFactory.attachment(card) : message);
+          // 메시지 먼저 전송
+          await context.sendActivity(MessageFactory.text(message));
+          // 카드가 있으면 카드도 전송
+          if (card) {
+            await context.sendActivity(MessageFactory.attachment(card));
+          }
         }
       );
       console.log('✅ Notification sent to group chat');
