@@ -43,16 +43,16 @@ export class RecommendationServiceImpl implements RecommendationService {
       .map(h => this.restaurantRepo.findById(h.restaurant_id)?.name)
       .filter(Boolean) as string[];
 
-    // Get top rated restaurants
+    // Get top rated restaurants for logging/analysis (not for Ollama weighting)
     const allReviews = allRestaurants.map(r => ({
       name: r.name,
       rating: this.reviewRepo.getAverageRating(r.id),
     }))
       .filter(r => r.rating > 0)
-      .sort((a, b) => b.rating - a.rating)
-      .slice(0, 10);
+      .sort((a, b) => b.rating - a.rating);
 
-    const topRated = allReviews.map(r => r.name);
+    // Don't pass topRated to Ollama - let it decide independently
+    const topRated: string[] = [];
 
     const budget = this.settingRepo.getBudget();
 
@@ -117,72 +117,71 @@ export class RecommendationServiceImpl implements RecommendationService {
       !blacklisted.includes(r.name) && !recentVisits.includes(r.name)
     );
 
-    // Get historical data for similar weather
-    const similarWeatherHistories = this.historyRepo.findByWeather(
-      weather.condition.toLowerCase(),
-      Math.max(0, weather.temp - 5),
-      weather.temp + 5
-    );
-    const frequentRestaurantIds = new Set<number>();
-    for (const history of similarWeatherHistories) {
-      frequentRestaurantIds.add(history.restaurant_id);
-    }
+    if (available.length === 0) return [];
 
     // Build category preference based on weather
     let categoryPreferences: string[] = [];
     if (weather.condition.toLowerCase().includes('rain') || weather.condition.toLowerCase().includes('snow')) {
-      // Rain/Snow: prefer near restaurants
       categoryPreferences = ['분식', '한식', '일식'];
     } else if (weather.temp < 10) {
-      // Cold: prefer warm food
       categoryPreferences = ['한식', '국물', '분식'];
     } else if (weather.temp > 25) {
-      // Hot: prefer cool food
       categoryPreferences = ['일식', '냉면', '분식'];
     } else {
-      // Mild: balanced preference
       categoryPreferences = ['일식', '한식', '중식'];
     }
 
-    // Sort candidates:
-    // 1. Similar weather history → frequent restaurants
-    // 2. Category preference
-    // 3. Distance (closer first)
-    // 4. Rating
-    const sorted = available.sort((a, b) => {
-      // 1. Similar weather history score
-      const aInHistory = frequentRestaurantIds.has(a.id) ? 1 : 0;
-      const bInHistory = frequentRestaurantIds.has(b.id) ? 1 : 0;
-      if (aInHistory !== bInHistory) return bInHistory - aInHistory;
+    // Shuffle to increase variety, then prioritize by weather
+    const shuffled = [...available].sort(() => Math.random() - 0.5);
 
-      // 2. Category preference score
-      const aCategoryIdx = categoryPreferences.indexOf(a.category);
-      const bCategoryIdx = categoryPreferences.indexOf(b.category);
-      const aScore = aCategoryIdx >= 0 ? aCategoryIdx : 999;
-      const bScore = bCategoryIdx >= 0 ? bCategoryIdx : 999;
-      if (aScore !== bScore) return aScore - bScore;
+    // Group by category and pick one from each preferred category
+    const selectedByCategory = new Map<string, import('../core/types.js').Restaurant>();
+    const results: import('../core/types.js').RecommendationResult[] = [];
 
-      // 3. Distance (closer first for rain)
-      if (weather.condition.toLowerCase().includes('rain') || weather.condition.toLowerCase().includes('snow')) {
-        return a.distance - b.distance;
+    // 1. First, pick one from each preferred category
+    for (const category of categoryPreferences) {
+      const candidates = shuffled.filter(
+        r => r.category === category && !selectedByCategory.has(r.name)
+      );
+      if (candidates.length > 0) {
+        const picked = candidates[0];
+        selectedByCategory.set(picked.name, picked);
+        results.push({
+          name: picked.name,
+          reason: this.buildFallbackReason(weather, picked, category),
+          category: picked.category,
+          distance: picked.distance,
+        });
       }
+    }
 
-      // 4. Random for variety
-      return Math.random() - 0.5;
-    });
+    // 2. Fill remaining slots with random other categories
+    const remaining = shuffled.filter(r => !selectedByCategory.has(r.name));
+    for (const r of remaining) {
+      if (results.length >= 5) break;
+      results.push({
+        name: r.name,
+        reason: this.buildFallbackReason(weather, r, 'other'),
+        category: r.category,
+        distance: r.distance,
+      });
+    }
 
-    const reasonByCondition = (() => {
-      if (weather.condition === 'rain' || weather.condition === 'snow') return '비/눈 오는 날 가까운 식당';
-      if (weather.temp < 10) return '추운 날 따뜻한 메뉴';
-      if (weather.temp > 25) return '더운 날 시원한 메뉴';
-      return '오늘 날씨에 어울리는 메뉴';
+    return results.slice(0, 5);
+  }
+
+  private buildFallbackReason(
+    weather: import('../core/types.js').WeatherInfo,
+    restaurant: import('../core/types.js').Restaurant,
+    _category: string
+  ): string {
+    const weatherReason = (() => {
+      if (weather.condition === 'rain' || weather.condition === 'snow') return '비/눈 오는 날';
+      if (weather.temp < 10) return '추운 날';
+      if (weather.temp > 25) return '더운 날';
+      return '오늘 날씨';
     })();
 
-    return sorted.slice(0, 5).map(r => ({
-      name: r.name,
-      reason: `${reasonByCondition} · ${r.category} · ${r.distance}m`,
-      category: r.category,
-      distance: r.distance,
-    }));
+    return `${weatherReason} · ${restaurant.category} · ${restaurant.distance}m`;
   }
 }

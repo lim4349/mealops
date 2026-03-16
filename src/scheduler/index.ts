@@ -178,6 +178,8 @@ export class SchedulerImpl implements Scheduler {
     const soloVoters = this.voteRepo.findSoloVoters(today);
     const anyVoters = this.voteRepo.findAnyVoters(today);
 
+    const allUserIds = this.userRepo.findAll().map(u => u.id);
+
     const voteCard = buildVoteCard(
       restaurants,
       voteResults,
@@ -190,7 +192,9 @@ export class SchedulerImpl implements Scheduler {
       anyVoters,
       anyCount,
       uniqueVoterCount,
-      deliveryModeActive
+      deliveryModeActive,
+      undefined,
+      allUserIds
     );
 
     const message = `🍽️ **점심 투표 시간!**
@@ -215,12 +219,12 @@ ${result.message}
       const restaurant = this.restaurantRepo.findByName(result.data.restaurant);
       if (restaurant) {
         const voteResults = this.voteService.getResults(today);
-        const totalVotes = voteResults.reduce((sum, r) => sum + r.count, 0);
+        const winnerVotes = voteResults.find(r => r.restaurant_id === restaurant.id)?.count ?? 0;
 
         // Get current weather
         const weather = await this.weatherService.getCurrent();
 
-        this.historyRepo.add(restaurant.id, today, totalVotes, weather.temp, weather.condition);
+        this.historyRepo.add(restaurant.id, today, winnerVotes, weather.temp, weather.condition);
       }
     }
   }

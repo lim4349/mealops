@@ -19,7 +19,7 @@ export class OllamaServiceImpl implements OllamaService {
         prompt,
         stream: false,
         options: {
-          temperature: 0.7,
+          temperature: 1.0,
           num_predict: 500,
         },
       }, { timeout: 30000 });
@@ -42,16 +42,15 @@ export class OllamaServiceImpl implements OllamaService {
     const weatherInstruction = this.buildWeatherInstruction(context.weather);
 
     const prevLine = context.previousRecommendations?.length
-      ? `\n이전과 다르게(최대한 제외): ${context.previousRecommendations.join(', ')}`
+      ? `\n\n⚠️ 절대금지(다시 추천금지): ${context.previousRecommendations.join(', ')}\n이들 대신 다른 식당을 추천하세요.`
       : '';
 
     return `날씨: ${context.weather.temp}도 ${context.weather.description}. ${weatherInstruction}.
 식당 목록: ${restaurantList}
-제외(최근): ${context.recentVisits.join(', ') || '없음'}
-제외(블랙): ${context.blacklisted.join(', ') || '없음'}
-우선추천: ${context.topRated.slice(0, 5).join(', ') || '없음'}${prevLine}
+제외(최근3일): ${context.recentVisits.join(', ') || '없음'}
+제외(블랙리스트): ${context.blacklisted.join(', ') || '없음'}${prevLine}
 
-위 식당 목록에서만 5개 추천. JSON만 출력:
+위 식당 목록에서만 5개 추천. 각각 다른 카테고리면 더 좋음. JSON만 출력:
 [{"name":"식당이름","reason":"날씨/음식 특성 위주로 짧게"},...]`;
   }
 

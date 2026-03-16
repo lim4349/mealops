@@ -339,12 +339,12 @@ export class MeaLOpsBot extends ActivityHandler {
             const restaurant = this.deps.restaurantRepo.findByName(result.data.restaurant);
             if (restaurant) {
               const voteResults = this.deps.voteService.getResults(today);
-              const totalVotes = voteResults.reduce((sum, r) => sum + r.count, 0);
+              const winnerVotes = voteResults.find(r => r.restaurant_id === restaurant.id)?.count ?? 0;
               try {
                 const weather = await this.deps.weatherService.getCurrent();
-                this.deps.historyRepo.add(restaurant.id, today, totalVotes, weather.temp, weather.condition);
+                this.deps.historyRepo.add(restaurant.id, today, winnerVotes, weather.temp, weather.condition);
               } catch {
-                this.deps.historyRepo.add(restaurant.id, today, totalVotes);
+                this.deps.historyRepo.add(restaurant.id, today, winnerVotes);
               }
             }
             return this.cardResponse(buildResponseCard(`🍽️ ${result.message}\n\n13:30에 리뷰 알림이 발송됩니다.`, true));
@@ -354,38 +354,48 @@ export class MeaLOpsBot extends ActivityHandler {
 
         case 'dashboard': {
           const history = this.deps.historyRepo.findRecent(90);
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week'));
+          const userReviews = this.deps.reviewRepo.findByUser(userId);
+          const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys));
         }
 
         case 'dashboard_view': {
           const view = (data.view === 'month') ? 'month' : 'week';
           const history = this.deps.historyRepo.findRecent(90);
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view));
+          const userReviews = this.deps.reviewRepo.findByUser(userId);
+          const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewedKeys));
         }
 
         case 'show_review': {
-          const { restaurantName } = data;
-          return this.cardResponse(buildReviewCard(restaurantName));
+          const { restaurantName, visitDate: rvDate } = data;
+          return this.cardResponse(buildReviewCard(restaurantName, rvDate));
         }
 
         case 'review': {
-          const { restaurantName, rating } = data;
+          const { restaurantName, rating, visitDate: rvDate } = data;
+          const visitDate = rvDate ?? today;
           const restaurant = this.deps.restaurantRepo.findByName(restaurantName);
           if (restaurant) {
-            const existing = this.deps.reviewRepo.findByUserAndRestaurantAndDate(userId, restaurant.id, today);
+            const existing = this.deps.reviewRepo.findByUserAndRestaurantAndDate(userId, restaurant.id, visitDate);
             if (existing) {
-              // 기존 리뷰 업데이트
-              this.deps.reviewRepo.updateRating(userId, restaurant.id, today, rating);
+              this.deps.reviewRepo.updateRating(userId, restaurant.id, visitDate, rating);
             } else {
-              // 새 리뷰 생성
               this.deps.reviewRepo.create({
                 user_id: userId,
                 restaurant_id: restaurant.id,
                 rating,
-                visit_date: today,
+                visit_date: visitDate,
                 comment: undefined,
               });
             }
+          }
+          // 히스토리에서 리뷰한 경우 바로 대시보드로 복귀
+          if (rvDate) {
+            const history = this.deps.historyRepo.findRecent(90);
+            const userReviews = this.deps.reviewRepo.findByUser(userId);
+            const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
+            return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys));
           }
           return this.cardResponse(buildResponseCard(`⭐ '${restaurantName}'에 ${rating}점 리뷰가 등록되었습니다!`, true));
         }
@@ -410,7 +420,10 @@ export class MeaLOpsBot extends ActivityHandler {
     const restaurants = this.deps.restaurantRepo.findAll();
     const globalBlacklistedIds = this.deps.blacklistRepo.getBlacklistedRestaurantIds();
     const userBlacklistedIds = this.deps.blacklistRepo.getUserBlacklist(userId).map(r => r.id);
-    return buildListCard(restaurants, globalBlacklistedIds, sortKeys, groupByCategory, userBlacklistedIds);
+    const avgRatings = new Map<number, number>(
+      restaurants.map(r => [r.id, this.deps.reviewRepo.getAverageRating(r.id)])
+    );
+    return buildListCard(restaurants, globalBlacklistedIds, sortKeys, groupByCategory, userBlacklistedIds, avgRatings);
   }
 
   private buildVoteCardForToday(userId: string): any {

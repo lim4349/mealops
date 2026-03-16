@@ -48,7 +48,9 @@ const voteService = new VoteServiceImpl(
   voteRepo,
   userRepo,
   restaurantRepo,
-  blacklistRepo
+  blacklistRepo,
+  historyRepo,
+  reviewRepo
 );
 
 const recommendationService = new RecommendationServiceImpl(

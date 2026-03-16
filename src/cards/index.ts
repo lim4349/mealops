@@ -149,7 +149,8 @@ export function buildVoteCard(
   anyCount?: number,
   uniqueVoterCount?: number,
   deliveryMode?: boolean,
-  globalBlacklistedIds?: number[]
+  globalBlacklistedIds?: number[],
+  refreshUserIds?: string[]
 ): Attachment {
   const voteMap = new Map(voteResults.map(v => [v.restaurant_id, v.count]));
   const userVoteIds = new Set(userVoteRestaurantIds || []);
@@ -252,12 +253,22 @@ export function buildVoteCard(
     ));
   }
 
-  return CardFactory.adaptiveCard({
+  const card: any = {
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     type: 'AdaptiveCard',
     version: '1.4',
     body,
-  });
+  };
+
+  // Universal Actions refresh: Teams가 각 사용자별로 show_vote를 재호출해 개인화 상태 표시
+  if (refreshUserIds && refreshUserIds.length > 0) {
+    card.refresh = {
+      action: { type: 'Action.Execute', verb: 'show_vote', title: 'Refresh', data: {} },
+      userIds: refreshUserIds,
+    };
+  }
+
+  return CardFactory.adaptiveCard(card);
 }
 
 // Recommendation card - 제목 우측 새로고침 인라인 + 투표 버튼
@@ -342,7 +353,7 @@ export function buildRecommendCard(recommendations: RecommendationResult[]): Att
 }
 
 // Review card
-export function buildReviewCard(restaurantName: string): Attachment {
+export function buildReviewCard(restaurantName: string, visitDate?: string): Attachment {
   return CardFactory.adaptiveCard({
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     type: 'AdaptiveCard',
@@ -357,16 +368,18 @@ export function buildReviewCard(restaurantName: string): Attachment {
       },
       {
         type: 'TextBlock',
-        text: `${restaurantName}의 평점을 매겨주세요!`,
+        text: visitDate
+          ? `${restaurantName} (${visitDate})의 평점을 매겨주세요!`
+          : `${restaurantName}의 평점을 매겨주세요!`,
         wrap: true,
       },
     ],
     actions: [
-      { type: 'Action.Execute', verb: 'review', title: '⭐ 1점',     data: { restaurantName, rating: 1 } },
-      { type: 'Action.Execute', verb: 'review', title: '⭐⭐ 2점',   data: { restaurantName, rating: 2 } },
-      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐ 3점', data: { restaurantName, rating: 3 } },
-      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐ 4점',   data: { restaurantName, rating: 4 } },
-      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐⭐ 5점', data: { restaurantName, rating: 5 } },
+      { type: 'Action.Execute', verb: 'review', title: '⭐ 1점',         data: { restaurantName, rating: 1, visitDate } },
+      { type: 'Action.Execute', verb: 'review', title: '⭐⭐ 2점',       data: { restaurantName, rating: 2, visitDate } },
+      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐ 3점',     data: { restaurantName, rating: 3, visitDate } },
+      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐ 4점',   data: { restaurantName, rating: 4, visitDate } },
+      { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐⭐ 5점', data: { restaurantName, rating: 5, visitDate } },
     ],
   });
 }
@@ -385,12 +398,13 @@ export function buildResponseCard(message: string, showBack?: boolean): Attachme
 }
 
 // 식당 목록 한 행 (🚫 ✏️ 🗑️ 버튼 포함)
-function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlackSet: Set<number>): any {
+function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlackSet: Set<number>, avgRating?: number): any {
   const isUserBlacklisted = userBlackSet.has(r.id);
   const isGlobalBlacklisted = globalBlackSet.has(r.id);
   const deliveryBadge = r.is_delivery ? ' 🛵' : '';
   const nameText = `${isUserBlacklisted ? '🚫 ' : ''}${r.name}${r.alias ? ` (${r.alias})` : ''}${deliveryBadge}`;
-  const detailText = `${r.category} | ${r.distance}m | ₩${r.price.toLocaleString()}`;
+  const ratingBadge = avgRating && avgRating > 0 ? ` | ⭐ ${avgRating.toFixed(1)}` : '';
+  const detailText = `${r.category} | ${r.distance}m | ₩${r.price.toLocaleString()}${ratingBadge}`;
 
   return {
     type: 'ColumnSet',
@@ -426,7 +440,7 @@ function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlac
   };
 }
 
-export type SortKey = { field: 'name' | 'distance' | 'price'; order: 'asc' | 'desc' };
+export type SortKey = { field: 'name' | 'distance' | 'price' | 'rating'; order: 'asc' | 'desc' };
 
 // List card - 복수 정렬 + 카테고리 그룹핑 + 각 행 인라인 버튼
 export function buildListCard(
@@ -434,18 +448,20 @@ export function buildListCard(
   blacklistedIds: number[] = [],
   sortKeys: SortKey[] = [],
   groupByCategory: boolean = false,
-  userBlacklistedIds: number[] = []
+  userBlacklistedIds: number[] = [],
+  avgRatings: Map<number, number> = new Map()
 ): Attachment {
   const userBlackSet = new Set(userBlacklistedIds);
   const globalBlackSet = new Set(blacklistedIds);
 
   // 정렬 버튼 상태 계산
   const PRIORITY_NUM = ['①', '②', '③'];
-  function getSortButton(field: 'name' | 'distance' | 'price', baseLabel: string): { title: string; nextKeys: SortKey[] } {
+  function getSortButton(field: 'name' | 'distance' | 'price' | 'rating', baseLabel: string): { title: string; nextKeys: SortKey[] } {
     const idx = sortKeys.findIndex(k => k.field === field);
     if (idx === -1) {
-      // 비활성 → 클릭 시 마지막에 asc 추가
-      return { title: baseLabel, nextKeys: [...sortKeys, { field, order: 'asc' }] };
+      // 비활성 → 클릭 시 마지막에 asc 추가 (rating은 desc가 기본)
+      const defaultOrder = field === 'rating' ? 'desc' : 'asc';
+      return { title: baseLabel, nextKeys: [...sortKeys, { field, order: defaultOrder }] };
     }
     const priority = PRIORITY_NUM[idx] ?? `${idx + 1}`;
     if (sortKeys[idx].order === 'asc') {
@@ -461,6 +477,7 @@ export function buildListCard(
   const nameSortBtn    = getSortButton('name',     '가나다');
   const distSortBtn    = getSortButton('distance', '거리');
   const priceSortBtn   = getSortButton('price',    '가격');
+  const ratingSortBtn  = getSortButton('rating',   '⭐점수');
 
   const body: any[] = [
     buildTopMenuActionSet(),
@@ -473,9 +490,10 @@ export function buildListCard(
     {
       type: 'ActionSet',
       actions: [
-        { type: 'Action.Execute', verb: 'sort_list', title: nameSortBtn.title,  data: { sortKeys: nameSortBtn.nextKeys,  groupByCategory } },
-        { type: 'Action.Execute', verb: 'sort_list', title: distSortBtn.title,  data: { sortKeys: distSortBtn.nextKeys,  groupByCategory } },
-        { type: 'Action.Execute', verb: 'sort_list', title: priceSortBtn.title, data: { sortKeys: priceSortBtn.nextKeys, groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: nameSortBtn.title,   data: { sortKeys: nameSortBtn.nextKeys,   groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: distSortBtn.title,   data: { sortKeys: distSortBtn.nextKeys,   groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: priceSortBtn.title,  data: { sortKeys: priceSortBtn.nextKeys,  groupByCategory } },
+        { type: 'Action.Execute', verb: 'sort_list', title: ratingSortBtn.title, data: { sortKeys: ratingSortBtn.nextKeys, groupByCategory } },
         {
           type: 'Action.Execute', verb: 'sort_list',
           title: groupByCategory ? '종류 ✓' : '종류',
@@ -492,9 +510,10 @@ export function buildListCard(
     sorted.sort((a, b) => {
       for (const key of sortKeys) {
         let cmp = 0;
-        if (key.field === 'name')     cmp = a.name.localeCompare(b.name, 'ko');
+        if (key.field === 'name')          cmp = a.name.localeCompare(b.name, 'ko');
         else if (key.field === 'distance') cmp = a.distance - b.distance;
         else if (key.field === 'price')    cmp = a.price - b.price;
+        else if (key.field === 'rating')   cmp = (avgRatings.get(a.id) ?? 0) - (avgRatings.get(b.id) ?? 0);
         if (cmp !== 0) return key.order === 'asc' ? cmp : -cmp;
       }
       return 0;
@@ -524,12 +543,12 @@ export function buildListCard(
         color: 'accent',
       });
       for (const r of grouped[cat]) {
-        body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet));
+        body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet, avgRatings.get(r.id)));
       }
     }
   } else {
     for (const r of sorted) {
-      body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet));
+      body.push(buildRestaurantRow(r, userBlackSet, globalBlackSet, avgRatings.get(r.id)));
     }
   }
 
@@ -774,7 +793,8 @@ function getWeekOfMonth(date: Date): number {
 export function buildDashboardCard(
   history: SelectedHistory[],
   restaurantRepo: RestaurantRepository,
-  view: 'week' | 'month' = 'week'
+  view: 'week' | 'month' = 'week',
+  reviewedKeys: Set<string> = new Set()
 ): Attachment {
   const today = new Date();
   const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
@@ -824,6 +844,8 @@ export function buildDashboardCard(
         { type: 'TextBlock', text: restaurantName, weight: 'bolder', spacing: 'none' },
         ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
       ];
+      const reviewKey = `${h.restaurant_id}_${h.selected_date}`;
+      const isReviewed = reviewedKeys.has(reviewKey);
       body.push({
         type: 'ColumnSet',
         spacing: 'small',
@@ -834,7 +856,13 @@ export function buildDashboardCard(
           ]},
           { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
             type: 'ActionSet',
-            actions: [{ type: 'Action.Execute', verb: 'show_review', title: '⭐', data: { restaurantName } }],
+            actions: [{
+              type: 'Action.Execute',
+              verb: 'show_review',
+              title: isReviewed ? '✅ 리뷰함' : '⭐ 리뷰',
+              style: isReviewed ? 'positive' : 'default',
+              data: { restaurantName, visitDate: h.selected_date },
+            }],
           }]},
         ],
       });
@@ -889,6 +917,8 @@ export function buildDashboardCard(
         { type: 'TextBlock', text: restaurantName2, spacing: 'none' },
         ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
       ];
+      const reviewKey2 = `${h.restaurant_id}_${h.selected_date}`;
+      const isReviewed2 = reviewedKeys.has(reviewKey2);
       body.push({
         type: 'ColumnSet',
         spacing: 'small',
@@ -899,7 +929,13 @@ export function buildDashboardCard(
           ]},
           { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
             type: 'ActionSet',
-            actions: [{ type: 'Action.Execute', verb: 'show_review', title: '⭐', data: { restaurantName: restaurantName2 } }],
+            actions: [{
+              type: 'Action.Execute',
+              verb: 'show_review',
+              title: isReviewed2 ? '✅ 리뷰함' : '⭐ 리뷰',
+              style: isReviewed2 ? 'positive' : 'default',
+              data: { restaurantName: restaurantName2, visitDate: h.selected_date },
+            }],
           }]},
         ],
       });

@@ -6,6 +6,8 @@ import type {
   RestaurantRepository,
   Restaurant,
   BlacklistRepository,
+  SelectedHistoryRepository,
+  ReviewRepository,
 } from '../core/types.js';
 
 export class VoteServiceImpl implements VoteService {
@@ -13,7 +15,9 @@ export class VoteServiceImpl implements VoteService {
     private voteRepo: VoteRepository,
     private userRepo: UserRepository,
     private restaurantRepo: RestaurantRepository,
-    private blacklistRepo: BlacklistRepository
+    private blacklistRepo: BlacklistRepository,
+    private historyRepo: SelectedHistoryRepository,
+    private reviewRepo: ReviewRepository
   ) {}
 
   async vote(
@@ -161,21 +165,71 @@ export class VoteServiceImpl implements VoteService {
 
     // Find max votes
     const maxVotes = Math.max(...results.map(r => r.count));
-    const winners = results.filter(r => r.count === maxVotes);
+    let candidates = results.filter(r => r.count === maxVotes);
 
-    if (winners.length === 1) {
+    if (candidates.length === 1) {
       return {
         success: true,
-        message: `오늘은 ${winners[0].restaurant_name}(으)로 결정했습니다! ${winners[0].count}표 🍽️`,
-        data: { restaurant: winners[0].restaurant_name, reason: `${winners[0].count}표 득표` },
+        message: `오늘은 ${candidates[0].restaurant_name}(으)로 결정했습니다! ${candidates[0].count}표 🍽️`,
+        data: { restaurant: candidates[0].restaurant_name, reason: `${candidates[0].count}표 득표` },
       };
     }
 
-    // Tie-breaker: random
-    const winner = winners[Math.floor(Math.random() * winners.length)];
+    // Tie-breaker 1: 최근 30일 방문 안 한 곳 우선 (가장 오래 전에 방문한 순)
+    const visitMap = new Map<number, string>(); // restaurantId → lastVisitDate (or '' if never)
+    for (const c of candidates) {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      if (!restaurant) continue;
+      const dates = this.historyRepo.getRecentVisitDates(restaurant.id, 30);
+      visitMap.set(restaurant.id, dates[0] ?? ''); // 가장 최근 방문일 (없으면 '')
+    }
+    const minVisit = candidates.reduce((min, c) => {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      const v = restaurant ? (visitMap.get(restaurant.id) ?? '') : '';
+      return v < min ? v : min;
+    }, '\uFFFF');
+    candidates = candidates.filter(c => {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      return restaurant ? (visitMap.get(restaurant.id) ?? '') === minVisit : false;
+    });
+
+    if (candidates.length === 1) {
+      return {
+        success: true,
+        message: `동표! 최근 방문 적은 ${candidates[0].restaurant_name}(으)로 결정했습니다! 🍽️`,
+        data: { restaurant: candidates[0].restaurant_name, reason: '동표 - 최근 방문 적은 곳 선정' },
+      };
+    }
+
+    // Tie-breaker 2: 평점 높은 곳 우선
+    const ratingMap = new Map<number, number>();
+    for (const c of candidates) {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      if (!restaurant) continue;
+      ratingMap.set(restaurant.id, this.reviewRepo.getAverageRating(restaurant.id));
+    }
+    const maxRating = Math.max(...candidates.map(c => {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      return restaurant ? (ratingMap.get(restaurant.id) ?? 0) : 0;
+    }));
+    candidates = candidates.filter(c => {
+      const restaurant = this.restaurantRepo.findByName(c.restaurant_name);
+      return restaurant ? (ratingMap.get(restaurant.id) ?? 0) === maxRating : false;
+    });
+
+    if (candidates.length === 1) {
+      return {
+        success: true,
+        message: `동표! 평점 높은 ${candidates[0].restaurant_name}(으)로 결정했습니다! ⭐`,
+        data: { restaurant: candidates[0].restaurant_name, reason: '동표 - 평점 높은 곳 선정' },
+      };
+    }
+
+    // Tie-breaker 3: 랜덤
+    const winner = candidates[Math.floor(Math.random() * candidates.length)];
     return {
       success: true,
-      message: `동표 발생! 무작위로 ${winner.restaurant_name}(으)로 결정했습니다! 🎲`,
+      message: `동표! 무작위로 ${winner.restaurant_name}(으)로 결정했습니다! 🎲`,
       data: { restaurant: winner.restaurant_name, reason: '동표 무작위 선정' },
     };
   }
