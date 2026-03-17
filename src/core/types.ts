@@ -35,7 +35,7 @@ export interface Review {
   id: number;
   user_id: string;
   restaurant_id: number;
-  rating: number; // 1-5
+  rating: number; // 0=안먹음(집계 제외), 1-5
   visit_date: string;
   comment?: string;
   created_at: string;

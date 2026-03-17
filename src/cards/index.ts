@@ -380,6 +380,7 @@ export function buildReviewCard(restaurantName: string, visitDate?: string): Att
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐ 3점',     data: { restaurantName, rating: 3, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐ 4점',   data: { restaurantName, rating: 4, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐⭐ 5점', data: { restaurantName, rating: 5, visitDate } },
+      { type: 'Action.Execute', verb: 'review', title: '🚫 안먹음',      data: { restaurantName, rating: 0, visitDate } },
     ],
   });
 }
@@ -789,7 +790,7 @@ export function buildDashboardCard(
   history: SelectedHistory[],
   restaurantRepo: RestaurantRepository,
   view: 'week' | 'month' | 'regulars' = 'week',
-  reviewedKeys: Set<string> = new Set(),
+  reviewMap: Map<string, number> = new Map(),
   allTimeHistory: SelectedHistory[] = []
 ): Attachment {
   const today = new Date();
@@ -921,7 +922,8 @@ export function buildDashboardCard(
         const restaurant = h ? restaurantRepo.findById(h.restaurant_id) : undefined;
         const restaurantName = restaurant?.name ?? '';
         const truncated = restaurantName.length > 5 ? restaurantName.slice(0, 5) + '…' : restaurantName;
-        const isReviewed = h ? reviewedKeys.has(`${h.restaurant_id}_${dateStr}`) : false;
+        const reviewRating = h ? (reviewMap.get(`${h.restaurant_id}_${dateStr}`) ?? -1) : -1;
+        const reviewEmoji = reviewRating === -1 ? '⭐' : reviewRating === 0 ? '🚫' : '✅';
 
         const items: any[] = [];
         if (dayNum !== null) {
@@ -931,7 +933,7 @@ export function buildDashboardCard(
         }
         if (h && restaurant) {
           items.push({ type: 'TextBlock', text: truncated, size: 'small', horizontalAlignment: 'center', spacing: 'none', wrap: false });
-          items.push({ type: 'TextBlock', text: isReviewed ? '✅' : '⭐', horizontalAlignment: 'center', spacing: 'none', size: 'small' });
+          items.push({ type: 'TextBlock', text: reviewEmoji, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
         } else if (dayNum !== null) {
           items.push({ type: 'TextBlock', text: '·', isSubtle: true, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
         }
@@ -949,9 +951,9 @@ export function buildDashboardCard(
       body.push({ type: 'ColumnSet', columns: dayCols, spacing: 'small', separator: weekIdx === 0 });
     });
 
-    // 리뷰 필요 섹션
+    // 리뷰 필요 섹션 (rating=0 안먹음 표시도 완료로 간주)
     const unreviewed = [...filtered]
-      .filter(h => !reviewedKeys.has(`${h.restaurant_id}_${h.selected_date}`))
+      .filter(h => !reviewMap.has(`${h.restaurant_id}_${h.selected_date}`))
       .sort((a, b) => b.selected_date.localeCompare(a.selected_date));
 
     if (unreviewed.length > 0) {

@@ -356,8 +356,8 @@ export class MeaLOpsBot extends ActivityHandler {
           const history = this.deps.historyRepo.findRecent(90);
           const allTimeHistory = this.deps.historyRepo.findAll();
           const userReviews = this.deps.reviewRepo.findByUser(userId);
-          const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys, allTimeHistory));
+          const reviewMap = new Map(userReviews.map(r => [`${r.restaurant_id}_${r.visit_date}`, r.rating] as [string, number]));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewMap, allTimeHistory));
         }
 
         case 'dashboard_view': {
@@ -366,8 +366,8 @@ export class MeaLOpsBot extends ActivityHandler {
           const history = this.deps.historyRepo.findRecent(90);
           const allTimeHistory = this.deps.historyRepo.findAll();
           const userReviews = this.deps.reviewRepo.findByUser(userId);
-          const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewedKeys, allTimeHistory));
+          const reviewMap = new Map(userReviews.map(r => [`${r.restaurant_id}_${r.visit_date}`, r.rating] as [string, number]));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewMap, allTimeHistory));
         }
 
         case 'show_review': {
@@ -396,11 +396,15 @@ export class MeaLOpsBot extends ActivityHandler {
           // 히스토리에서 리뷰한 경우 바로 대시보드로 복귀
           if (rvDate) {
             const history = this.deps.historyRepo.findRecent(90);
+            const allTimeHistory = this.deps.historyRepo.findAll();
             const userReviews = this.deps.reviewRepo.findByUser(userId);
-            const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
-            return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys));
+            const reviewMap = new Map(userReviews.map(r => [`${r.restaurant_id}_${r.visit_date}`, r.rating] as [string, number]));
+            return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewMap, allTimeHistory));
           }
-          return this.cardResponse(buildResponseCard(`⭐ '${restaurantName}'에 ${rating}점 리뷰가 등록되었습니다!`, true));
+          const msg = rating === 0
+            ? `🚫 '${restaurantName}' 안먹음으로 표시했습니다.`
+            : `⭐ '${restaurantName}'에 ${rating}점 리뷰가 등록되었습니다!`;
+          return this.cardResponse(buildResponseCard(msg, true));
         }
 
         default: {

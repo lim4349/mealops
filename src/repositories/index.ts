@@ -368,7 +368,7 @@ export class ReviewRepositoryImpl implements ReviewRepository {
 
   getAverageRating(restaurantId: number): number {
     const result = this.db.get<{ avg: number }>(
-      'SELECT AVG(rating) as avg FROM reviews WHERE restaurant_id = ?',
+      'SELECT AVG(rating) as avg FROM reviews WHERE restaurant_id = ? AND rating > 0',
       [restaurantId]
     );
     return result?.avg ? Math.round(result.avg * 10) / 10 : 0;
