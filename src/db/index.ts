@@ -67,7 +67,7 @@ export class SqliteDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id TEXT NOT NULL,
         restaurant_id INTEGER NOT NULL,
-        rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+        rating INTEGER CHECK(rating BETWEEN 0 AND 5),
         visit_date TEXT NOT NULL,
         comment TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -180,6 +180,33 @@ export class SqliteDatabase {
       }
     } catch {
       // Column already exists
+    }
+
+    // Migration 5: Allow rating=0 (안먹음) in reviews
+    try {
+      const tableInfo = this.db.prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reviews'"
+      ).get() as { sql: string } | undefined;
+      if (tableInfo?.sql?.includes('BETWEEN 1 AND 5')) {
+        this.db.exec(`
+          ALTER TABLE reviews RENAME TO reviews_old;
+          CREATE TABLE reviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            restaurant_id INTEGER NOT NULL,
+            rating INTEGER CHECK(rating BETWEEN 0 AND 5),
+            visit_date TEXT NOT NULL,
+            comment TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (restaurant_id) REFERENCES restaurants(id)
+          );
+          INSERT INTO reviews SELECT * FROM reviews_old;
+          DROP TABLE reviews_old;
+        `);
+      }
+    } catch (err) {
+      console.error('Error during reviews rating migration:', err);
     }
   }
 
