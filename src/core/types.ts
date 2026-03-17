@@ -208,6 +208,7 @@ export interface ReviewRepository {
 
 export interface SelectedHistoryRepository {
   add(restaurantId: number, date: string, voteCount: number, weatherTemp?: number, weatherCondition?: string): void;
+  findAll(): SelectedHistory[];
   findRecent(days: number): SelectedHistory[];
   findByDate(date: string): SelectedHistory | undefined;
   getRecentVisitDates(restaurantId: number, days: number): string[];

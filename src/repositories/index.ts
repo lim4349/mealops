@@ -385,6 +385,13 @@ export class SelectedHistoryRepositoryImpl implements SelectedHistoryRepository 
     );
   }
 
+  findAll(): SelectedHistory[] {
+    return this.db.all<SelectedHistory>(
+      'SELECT * FROM selected_history ORDER BY selected_date DESC',
+      []
+    );
+  }
+
   findRecent(days: number): SelectedHistory[] {
     return this.db.all<SelectedHistory>(`
       SELECT sh.* FROM selected_history sh

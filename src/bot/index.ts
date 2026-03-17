@@ -354,17 +354,20 @@ export class MeaLOpsBot extends ActivityHandler {
 
         case 'dashboard': {
           const history = this.deps.historyRepo.findRecent(90);
+          const allTimeHistory = this.deps.historyRepo.findAll();
           const userReviews = this.deps.reviewRepo.findByUser(userId);
           const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewedKeys, allTimeHistory));
         }
 
         case 'dashboard_view': {
-          const view = (data.view === 'month') ? 'month' : 'week';
+          const view: 'week' | 'month' | 'regulars' =
+            data.view === 'month' ? 'month' : data.view === 'regulars' ? 'regulars' : 'week';
           const history = this.deps.historyRepo.findRecent(90);
+          const allTimeHistory = this.deps.historyRepo.findAll();
           const userReviews = this.deps.reviewRepo.findByUser(userId);
           const reviewedKeys = new Set(userReviews.map(r => `${r.restaurant_id}_${r.visit_date}`));
-          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewedKeys));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewedKeys, allTimeHistory));
         }
 
         case 'show_review': {

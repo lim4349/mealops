@@ -785,36 +785,16 @@ function buildWeatherLabel(temp?: number | null, condition?: string | null): str
 }
 
 // Dashboard/History card
-function getWeekOfMonth(date: Date): number {
-  const firstDay = new Date(date.getFullYear(), date.getMonth(), 1);
-  return Math.ceil((date.getDate() + firstDay.getDay()) / 7);
-}
-
 export function buildDashboardCard(
   history: SelectedHistory[],
   restaurantRepo: RestaurantRepository,
-  view: 'week' | 'month' = 'week',
-  reviewedKeys: Set<string> = new Set()
+  view: 'week' | 'month' | 'regulars' = 'week',
+  reviewedKeys: Set<string> = new Set(),
+  allTimeHistory: SelectedHistory[] = []
 ): Attachment {
   const today = new Date();
+  const DAY_LABELS = ['월', '화', '수', '목', '금'];
   const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
-
-  // 뷰에 따라 필터
-  let filtered: SelectedHistory[];
-  let title: string;
-
-  if (view === 'week') {
-    const dow = today.getDay();
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
-    const mondayStr = monday.toISOString().split('T')[0];
-    filtered = history.filter(h => h.selected_date >= mondayStr);
-    title = '📊 이번 주 점심';
-  } else {
-    const monthPrefix = today.toISOString().slice(0, 7); // YYYY-MM
-    filtered = history.filter(h => h.selected_date.startsWith(monthPrefix));
-    title = `📊 ${today.getMonth() + 1}월 점심`;
-  }
 
   const body: any[] = [
     buildTopMenuActionSet(),
@@ -823,54 +803,18 @@ export function buildDashboardCard(
       actions: [
         { type: 'Action.Execute', verb: 'dashboard_view', title: view === 'week' ? '주간 ✓' : '주간', data: { view: 'week' } },
         { type: 'Action.Execute', verb: 'dashboard_view', title: view === 'month' ? '월간 ✓' : '월간', data: { view: 'month' } },
+        { type: 'Action.Execute', verb: 'dashboard_view', title: view === 'regulars' ? '단골 ✓' : '단골', data: { view: 'regulars' } },
       ],
     },
-    { type: 'TextBlock', text: title, weight: 'bolder', size: 'large', spacing: 'small' },
   ];
 
-  if (filtered.length === 0) {
-    body.push({ type: 'TextBlock', text: '아직 기록이 없습니다.', isSubtle: true, spacing: 'medium' });
-  } else if (view === 'week') {
-    // 주간: 날짜별 목록
-    const sorted = [...filtered].sort((a, b) => a.selected_date.localeCompare(b.selected_date));
-    for (const h of sorted) {
-      const restaurant = restaurantRepo.findById(h.restaurant_id);
-      const d = new Date(h.selected_date + 'T00:00:00');
-      const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
-      const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
-      const restaurantName = restaurant?.name ?? '알 수 없음';
-      const infoItems: any[] = [
-        { type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small', spacing: 'none' },
-        { type: 'TextBlock', text: restaurantName, weight: 'bolder', spacing: 'none' },
-        ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
-      ];
-      const reviewKey = `${h.restaurant_id}_${h.selected_date}`;
-      const isReviewed = reviewedKeys.has(reviewKey);
-      body.push({
-        type: 'ColumnSet',
-        spacing: 'small',
-        columns: [
-          { type: 'Column', width: 'stretch', items: infoItems },
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [
-            { type: 'TextBlock', text: `${h.vote_count}표`, color: 'accent', isSubtle: true },
-          ]},
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
-            type: 'ActionSet',
-            actions: [{
-              type: 'Action.Execute',
-              verb: 'show_review',
-              title: isReviewed ? '✅ 리뷰함' : '⭐ 리뷰',
-              style: isReviewed ? 'positive' : 'default',
-              data: { restaurantName, visitDate: h.selected_date },
-            }],
-          }]},
-        ],
-      });
-    }
-  } else {
-    // 월간: 단골 TOP3 + 주차별 상세
+  // === 단골 탭 ===
+  if (view === 'regulars') {
+    body.push({ type: 'TextBlock', text: '🏆 올타임 단골', weight: 'bolder', size: 'large', spacing: 'small' });
+
+    const sourceHistory = allTimeHistory.length > 0 ? allTimeHistory : history;
     const counts = new Map<number, { name: string; count: number }>();
-    for (const h of filtered) {
+    for (const h of sourceHistory) {
       const r = restaurantRepo.findById(h.restaurant_id);
       if (r) {
         const ex = counts.get(h.restaurant_id);
@@ -878,67 +822,167 @@ export function buildDashboardCard(
         else counts.set(h.restaurant_id, { name: r.name, count: 1 });
       }
     }
-    const topPicks = Array.from(counts.values()).sort((a, b) => b.count - a.count).slice(0, 3);
+    const topPicks = Array.from(counts.values()).sort((a, b) => b.count - a.count);
 
-    body.push({ type: 'TextBlock', text: `총 ${filtered.length}일 기록`, isSubtle: true, spacing: 'small', size: 'small' });
-
-    if (topPicks.length > 0) {
-      body.push({ type: 'TextBlock', text: '🏆 이달의 단골', weight: 'bolder', spacing: 'medium' });
-      ['🥇', '🥈', '🥉'].slice(0, topPicks.length).forEach((medal, i) => {
+    if (topPicks.length === 0) {
+      body.push({ type: 'TextBlock', text: '아직 기록이 없습니다.', isSubtle: true, spacing: 'medium' });
+    } else {
+      const medals = ['🥇', '🥈', '🥉'];
+      topPicks.forEach((pick, i) => {
+        const rankLabel = i < 3 ? medals[i] : `${i + 1}위`;
         body.push({
           type: 'ColumnSet',
           spacing: 'small',
           columns: [
-            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: medal }] },
-            { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: topPicks[i].name, weight: 'bolder' }] },
-            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: `${topPicks[i].count}회`, color: 'accent', weight: 'bolder' }] },
+            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: rankLabel, spacing: 'none' }] },
+            { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: pick.name, weight: i < 3 ? 'bolder' : 'default', spacing: 'none' }] },
+            { type: 'Column', width: 'auto',    items: [{ type: 'TextBlock', text: `${pick.count}회`, color: 'accent', spacing: 'none' }] },
           ],
         });
       });
     }
+  } else {
+    // === 주간 / 월간 탭 ===
+    let filtered: SelectedHistory[];
+    let title: string;
 
-    // 주차별 상세
-    body.push({ type: 'TextBlock', text: '📋 상세 기록', weight: 'bolder', spacing: 'medium' });
-    const sorted = [...filtered].sort((a, b) => a.selected_date.localeCompare(b.selected_date));
-    let currentWeek = -1;
-    for (const h of sorted) {
-      const d = new Date(h.selected_date + 'T00:00:00');
-      const week = getWeekOfMonth(d);
-      if (week !== currentWeek) {
-        body.push({ type: 'TextBlock', text: `${week}주차`, weight: 'bolder', color: 'accent', spacing: 'small', size: 'small' });
-        currentWeek = week;
+    if (view === 'week') {
+      const dow = today.getDay();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+      const mondayStr = monday.toISOString().split('T')[0];
+      filtered = history.filter(h => h.selected_date >= mondayStr);
+      title = '📊 이번 주 점심';
+    } else {
+      const monthPrefix = today.toISOString().slice(0, 7);
+      filtered = history.filter(h => h.selected_date.startsWith(monthPrefix));
+      title = `📊 ${today.getMonth() + 1}월 점심`;
+    }
+
+    const historyByDate = new Map<string, SelectedHistory>();
+    for (const h of filtered) {
+      historyByDate.set(h.selected_date, h);
+    }
+
+    body.push({ type: 'TextBlock', text: title, weight: 'bolder', size: 'large', spacing: 'small' });
+    body.push({ type: 'TextBlock', text: `총 ${filtered.length}일 기록`, isSubtle: true, spacing: 'none', size: 'small' });
+
+    // 달력 헤더
+    const isMonth = view === 'month';
+    const headerCols: any[] = DAY_LABELS.map(day => ({
+      type: 'Column',
+      width: '1',
+      items: [{ type: 'TextBlock', text: day, weight: 'bolder', horizontalAlignment: 'center', size: 'small', spacing: 'none' }],
+    }));
+    if (isMonth) {
+      headerCols.unshift({ type: 'Column', width: '30px', items: [{ type: 'TextBlock', text: ' ', size: 'small' }] });
+    }
+    body.push({ type: 'ColumnSet', columns: headerCols, spacing: 'medium' });
+
+    // 주차 생성
+    const weeks: string[][] = [];
+    if (view === 'week') {
+      const dow = today.getDay();
+      const monday = new Date(today);
+      monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+      const week: string[] = [];
+      for (let i = 0; i < 5; i++) {
+        const d = new Date(monday);
+        d.setDate(monday.getDate() + i);
+        week.push(d.toISOString().split('T')[0]);
       }
-      const restaurant = restaurantRepo.findById(h.restaurant_id);
-      const dayLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
-      const weatherLabel = buildWeatherLabel(h.weather_temp, h.weather_condition);
-      const restaurantName2 = restaurant?.name ?? '알 수 없음';
-      const infoItems: any[] = [
-        { type: 'TextBlock', text: dayLabel, isSubtle: true, size: 'small', spacing: 'none' },
-        { type: 'TextBlock', text: restaurantName2, spacing: 'none' },
-        ...(weatherLabel ? [{ type: 'TextBlock', text: weatherLabel, isSubtle: true, size: 'small', spacing: 'none' }] : []),
-      ];
-      const reviewKey2 = `${h.restaurant_id}_${h.selected_date}`;
-      const isReviewed2 = reviewedKeys.has(reviewKey2);
-      body.push({
-        type: 'ColumnSet',
-        spacing: 'small',
-        columns: [
-          { type: 'Column', width: 'stretch', items: infoItems },
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [
-            { type: 'TextBlock', text: `${h.vote_count}표`, isSubtle: true, color: 'accent', size: 'small' },
-          ]},
-          { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
-            type: 'ActionSet',
-            actions: [{
-              type: 'Action.Execute',
-              verb: 'show_review',
-              title: isReviewed2 ? '✅ 리뷰함' : '⭐ 리뷰',
-              style: isReviewed2 ? 'positive' : 'default',
-              data: { restaurantName: restaurantName2, visitDate: h.selected_date },
-            }],
-          }]},
-        ],
+      weeks.push(week);
+    } else {
+      const year = today.getFullYear();
+      const month = today.getMonth();
+      const firstDay = new Date(year, month, 1);
+      const lastDay = new Date(year, month + 1, 0);
+      const firstDow = firstDay.getDay();
+      const firstMonday = new Date(firstDay);
+      firstMonday.setDate(firstDay.getDate() - (firstDow === 0 ? 6 : firstDow - 1));
+      const cur = new Date(firstMonday);
+      while (cur <= lastDay) {
+        const week: string[] = [];
+        for (let i = 0; i < 5; i++) {
+          const d = new Date(cur);
+          d.setDate(cur.getDate() + i);
+          week.push(d.getMonth() === month ? d.toISOString().split('T')[0] : '');
+        }
+        weeks.push(week);
+        cur.setDate(cur.getDate() + 7);
+      }
+    }
+
+    // 달력 셀 렌더링 (버튼 없음, 이모지만)
+    weeks.forEach((week, weekIdx) => {
+      const dayCols: any[] = week.map(dateStr => {
+        const dayNum = dateStr ? parseInt(dateStr.slice(8), 10) : null;
+        const h = dateStr ? historyByDate.get(dateStr) : undefined;
+        const restaurant = h ? restaurantRepo.findById(h.restaurant_id) : undefined;
+        const restaurantName = restaurant?.name ?? '';
+        const truncated = restaurantName.length > 5 ? restaurantName.slice(0, 5) + '…' : restaurantName;
+        const isReviewed = h ? reviewedKeys.has(`${h.restaurant_id}_${dateStr}`) : false;
+
+        const items: any[] = [];
+        if (dayNum !== null) {
+          items.push({ type: 'TextBlock', text: String(dayNum), size: 'small', isSubtle: true, horizontalAlignment: 'center', spacing: 'none' });
+        } else {
+          items.push({ type: 'TextBlock', text: ' ', size: 'small', spacing: 'none' });
+        }
+        if (h && restaurant) {
+          items.push({ type: 'TextBlock', text: truncated, size: 'small', horizontalAlignment: 'center', spacing: 'none', wrap: false });
+          items.push({ type: 'TextBlock', text: isReviewed ? '✅' : '⭐', horizontalAlignment: 'center', spacing: 'none', size: 'small' });
+        } else if (dayNum !== null) {
+          items.push({ type: 'TextBlock', text: '·', isSubtle: true, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
+        }
+        return { type: 'Column', width: '1', items };
       });
+
+      if (isMonth) {
+        dayCols.unshift({
+          type: 'Column',
+          width: '30px',
+          verticalContentAlignment: 'top',
+          items: [{ type: 'TextBlock', text: `${weekIdx + 1}주`, size: 'small', isSubtle: true, spacing: 'none' }],
+        });
+      }
+      body.push({ type: 'ColumnSet', columns: dayCols, spacing: 'small', separator: weekIdx === 0 });
+    });
+
+    // 리뷰 필요 섹션
+    const unreviewed = [...filtered]
+      .filter(h => !reviewedKeys.has(`${h.restaurant_id}_${h.selected_date}`))
+      .sort((a, b) => b.selected_date.localeCompare(a.selected_date));
+
+    if (unreviewed.length > 0) {
+      body.push({ type: 'TextBlock', text: '⭐ 리뷰 필요', weight: 'bolder', spacing: 'medium' });
+      for (const h of unreviewed) {
+        const restaurant = restaurantRepo.findById(h.restaurant_id);
+        if (!restaurant) continue;
+        const d = new Date(h.selected_date + 'T00:00:00');
+        const dateLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
+        body.push({
+          type: 'ColumnSet',
+          spacing: 'small',
+          columns: [
+            { type: 'Column', width: 'stretch', items: [
+              { type: 'TextBlock', text: restaurant.name, spacing: 'none', size: 'small', weight: 'bolder' },
+              { type: 'TextBlock', text: dateLabel, isSubtle: true, size: 'small', spacing: 'none' },
+            ]},
+            { type: 'Column', width: 'auto', verticalContentAlignment: 'center', items: [{
+              type: 'ActionSet',
+              actions: [{
+                type: 'Action.Execute',
+                verb: 'show_review',
+                title: '⭐ 리뷰',
+                data: { restaurantName: restaurant.name, visitDate: h.selected_date },
+              }],
+            }]},
+          ],
+        });
+      }
+    } else if (filtered.length > 0) {
+      body.push({ type: 'TextBlock', text: '✅ 이번 기간 리뷰 완료', isSubtle: true, spacing: 'medium', size: 'small' });
     }
   }
 
