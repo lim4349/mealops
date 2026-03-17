@@ -281,6 +281,17 @@ export class VoteRepositoryImpl implements VoteRepository {
       ORDER BY u.name
     `, [date]).map(row => ({ user_id: row.id, user_name: row.name }));
   }
+
+  countAllVotesByUser(userId: string): { restaurantId: number; count: number }[] {
+    return this.db.all<{ restaurantId: number; count: number }>(
+      `SELECT restaurant_id as restaurantId, COUNT(*) as count
+       FROM votes
+       WHERE user_id = ? AND restaurant_id IS NOT NULL AND is_solo = 0 AND is_any = 0
+       GROUP BY restaurant_id
+       ORDER BY count DESC`,
+      [userId]
+    );
+  }
 }
 
 export class BlacklistRepositoryImpl implements BlacklistRepository {

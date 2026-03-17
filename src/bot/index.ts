@@ -471,7 +471,7 @@ export class MeaLOpsBot extends ActivityHandler {
   private buildFavoritesMessage(stats: any): string {
     let message = `**🏆 ${stats.user_name}님의 최애 식당**\n\n`;
     if (stats.most_visited.length > 0) {
-      message += `**📊 자주 가는 식당**\n`;
+      message += `**📊 자주 투표한 식당**\n`;
       stats.most_visited.forEach((v: any) => { message += `• ${v.name} (${v.count}회)\n`; });
       message += '\n';
     }

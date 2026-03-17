@@ -187,6 +187,7 @@ export interface VoteRepository {
   findUserAnyVote(userId: string, date: string): Vote | undefined;
   cancelAnyVote(userId: string, date: string): boolean;
   findAnyVoters(date: string): VoterEntry[];
+  countAllVotesByUser(userId: string): { restaurantId: number; count: number }[];
 }
 
 export interface BlacklistRepository {
