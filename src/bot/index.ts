@@ -3,6 +3,15 @@ import {
   TurnContext,
   MessageFactory,
 } from 'botbuilder';
+import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+const APP_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf-8'));
+    return pkg.version ?? '';
+  } catch { return ''; }
+})();
 import type { CommandHandler } from '../handlers/command.js';
 import type { Dependencies, AdaptiveCardInvokeResponse, RecommendationResult } from '../core/types.js';
 import {
@@ -283,7 +292,7 @@ export class MeaLOpsBot extends ActivityHandler {
           const budget = this.deps.settingRepo.getBudget();
           const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
           const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
-          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive));
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive, APP_VERSION));
         }
 
         case 'set_budget': {
@@ -294,7 +303,7 @@ export class MeaLOpsBot extends ActivityHandler {
           const budget = this.deps.settingRepo.getBudget();
           const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
           const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
-          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive));
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, deliveryModeActive, APP_VERSION));
         }
 
         case 'toggle_force_decision': {
@@ -302,7 +311,7 @@ export class MeaLOpsBot extends ActivityHandler {
           this.deps.settingRepo.setForceDecisionEnabled(!current);
           const budget = this.deps.settingRepo.getBudget();
           const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
-          return this.cardResponse(buildSettingsCard(budget, !current, deliveryModeActive));
+          return this.cardResponse(buildSettingsCard(budget, !current, deliveryModeActive, APP_VERSION));
         }
 
         // 하위 호환 (기존 verb들)
@@ -310,14 +319,14 @@ export class MeaLOpsBot extends ActivityHandler {
           this.deps.settingRepo.setForceDecisionEnabled(true);
           const budget = this.deps.settingRepo.getBudget();
           const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
-          return this.cardResponse(buildSettingsCard(budget, true, deliveryModeActive));
+          return this.cardResponse(buildSettingsCard(budget, true, deliveryModeActive, APP_VERSION));
         }
 
         case 'set_force_off': {
           this.deps.settingRepo.setForceDecisionEnabled(false);
           const budget = this.deps.settingRepo.getBudget();
           const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
-          return this.cardResponse(buildSettingsCard(budget, false, deliveryModeActive));
+          return this.cardResponse(buildSettingsCard(budget, false, deliveryModeActive, APP_VERSION));
         }
 
         case 'toggle_delivery_setting': {
@@ -325,7 +334,7 @@ export class MeaLOpsBot extends ActivityHandler {
           this.deps.settingRepo.setDeliveryModeActive(!current);
           const budget = this.deps.settingRepo.getBudget();
           const forceEnabled = this.deps.settingRepo.getForceDecisionEnabled();
-          return this.cardResponse(buildSettingsCard(budget, forceEnabled, !current));
+          return this.cardResponse(buildSettingsCard(budget, forceEnabled, !current, APP_VERSION));
         }
 
         case 'delivery': {

@@ -726,14 +726,20 @@ export function buildBlacklistCard(restaurants: Restaurant[]): Attachment {
 }
 
 // Settings card - 식대 수정 + 강제결정/배달 단일 토글 버튼 + 하단 메뉴버튼 제거
-export function buildSettingsCard(budget: number, forceEnabled: boolean, deliveryModeActive: boolean = false): Attachment {
+export function buildSettingsCard(budget: number, forceEnabled: boolean, deliveryModeActive: boolean = false, appVersion?: string): Attachment {
   return CardFactory.adaptiveCard({
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
     type: 'AdaptiveCard',
     version: '1.4',
     body: [
       buildTopMenuActionSet(),
-      { type: 'TextBlock', text: '⚙️ 설정', weight: 'bolder', size: 'large' },
+      {
+        type: 'ColumnSet',
+        columns: [
+          { type: 'Column', width: 'stretch', items: [{ type: 'TextBlock', text: '⚙️ 설정', weight: 'bolder', size: 'large' }] },
+          { type: 'Column', width: 'auto', items: [{ type: 'TextBlock', text: appVersion ? `v${appVersion}` : '', isSubtle: true, size: 'small', horizontalAlignment: 'right' }] },
+        ],
+      },
       {
         type: 'TextBlock',
         text: `📊 1인 식대: ₩${budget.toLocaleString()}`,
