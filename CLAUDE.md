@@ -11,7 +11,7 @@
 - **언어**: Node.js + TypeScript
 - **프레임워크**: Express + MS Bot Framework (botbuilder)
 - **DB**: SQLite (better-sqlite3)
-- **LLM**: Ollama (gemma3:12b)
+- **LLM**: Ollama (gemma3:4b)
 - **인증**: SingleTenant (CloudAdapter)
 
 ## 프로젝트 구조
@@ -69,3 +69,30 @@ src/
 4. 새로운 기능은 Handler → Service → Repository 순서로 구현
 5. 카드 UI는 cards/index.ts에서만 수정
 6. 스케줄러는 UTC 기준 서버에서 KST(+9h) 변환해서 동작
+
+## 버전 관리 규칙
+**현재 버전: v1.0.0**
+
+### 시맨틱 버저닝 (vX.Y.Z)
+| 버전 | 언제 올리나 | 예시 |
+|------|------------|------|
+| Z (patch) | 버그 수정, 텍스트 변경 | v1.0.1 |
+| Y (minor) | 기능 추가, UI 개선 | v1.1.0 |
+| X (major) | 구조 변경, 대규모 리팩토링 | v2.0.0 |
+
+### 코드 수정 완료 후 반드시 수행
+```bash
+# 1. package.json 버전 업데이트 (해당 버전으로 수정)
+# 2. 빌드 확인
+npm run build
+# 3. 커밋
+git add [수정파일들]
+git commit -m "feat/fix/chore: vX.Y.Z - 변경 내용 요약"
+# 4. 태그
+git tag -a vX.Y.Z -m "vX.Y.Z - 변경 내용"
+```
+
+### 버전 히스토리
+| 버전 | 날짜 | 주요 변경 |
+|------|------|----------|
+| v1.0.0 | 2026-03-18 | AI 추천 고도화, 자연어 요청, 식당 태그 자동생성, 모바일 UX 개선 |
