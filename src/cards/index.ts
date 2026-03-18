@@ -59,8 +59,8 @@ export function buildMainMenuCard(weather?: WeatherInfo): Attachment {
     type: 'ActionSet',
     actions: [
       { type: 'Action.Execute', verb: 'my_blacklist',   title: '🚫 블랙리스트', data: {} },
-      { type: 'Action.Execute', verb: 'show_settings',  title: '⚙️ 설정',      data: {} },
       { type: 'Action.Execute', verb: 'dashboard',      title: '📊 히스토리',  data: {} },
+      { type: 'Action.Execute', verb: 'show_settings',  title: '⚙️ 설정',      data: {} },
     ],
   });
 
@@ -205,7 +205,7 @@ export function buildVoteCard(
   });
 
   // 구분선
-  body.push({ type: 'TextBlock', text: '─────────────────', isSubtle: true, spacing: 'small', size: 'small' });
+  body.push({ type: 'Container', separator: true, spacing: 'small', items: [] });
 
   // 혼밥 / 아무거나 - 최상단
   const soloSubItems: any[] = soloVoters && soloVoters.length > 0
@@ -219,7 +219,7 @@ export function buildVoteCard(
   body.push(buildVoteRow('vote_any', {}, '🎲 아무거나', anySubItems, anyCount || 0, !!userIsAny, userIsAny ? 'good' : 'default'));
 
   // 구분선
-  body.push({ type: 'TextBlock', text: '─────────────────', isSubtle: true, spacing: 'small', size: 'small' });
+  body.push({ type: 'Container', separator: true, spacing: 'small', items: [] });
 
   // 식당 목록 - 득표수 내림차순 정렬
   const sortedRestaurants = [...restaurants].sort((a, b) => {
@@ -272,18 +272,25 @@ export function buildVoteCard(
 }
 
 // Recommendation card - 제목 우측 새로고침 인라인 + 투표 버튼
-export function buildRecommendCard(recommendations: RecommendationResult[]): Attachment {
+export function buildRecommendCard(recommendations: RecommendationResult[], userRequest?: string): Attachment {
   const body: any[] = [
     buildTopMenuActionSet(),
-    // 제목과 새로고침 버튼을 같은 줄에 배치
+    // 제목
+    { type: 'TextBlock', text: '🤖 AI 추천 메뉴', weight: 'bolder', size: 'large' },
+    // 자연어 요청 입력 + 추천 버튼 통합
     {
       type: 'ColumnSet',
       columns: [
         {
           type: 'Column',
           width: 'stretch',
-          verticalContentAlignment: 'center',
-          items: [{ type: 'TextBlock', text: '🤖 AI 추천 메뉴', weight: 'bolder', size: 'large' }],
+          items: [{
+            type: 'Input.Text',
+            id: 'userRequest',
+            placeholder: '예: 매운거, 국물있는거, 가까운 곳',
+            maxLength: 30,
+            value: userRequest ?? '',
+          }],
         },
         {
           type: 'Column',
@@ -294,13 +301,21 @@ export function buildRecommendCard(recommendations: RecommendationResult[]): Att
             actions: [{
               type: 'Action.Execute',
               verb: 'refresh_recommend',
-              title: '🔄',
+              title: '🔄 추천',
+              associatedInputs: 'auto',
               data: {},
             }],
           }],
         },
       ],
     },
+    ...(userRequest ? [{
+      type: 'TextBlock',
+      text: `🔍 "${userRequest}" 기준 추천`,
+      isSubtle: true,
+      size: 'small',
+      spacing: 'none',
+    }] : []),
     ...recommendations.map((r, i) => ({
       type: 'ColumnSet',
       selectAction: {
@@ -323,9 +338,7 @@ export function buildRecommendCard(recommendations: RecommendationResult[]): Att
               type: 'TextBlock',
               text: r.reason,
               wrap: true,
-              isSubtle: true,
               spacing: 'small',
-              size: 'small',
             },
           ],
         },
@@ -375,12 +388,12 @@ export function buildReviewCard(restaurantName: string, visitDate?: string): Att
       },
     ],
     actions: [
+      { type: 'Action.Execute', verb: 'review', title: '🚫 안먹음',      data: { restaurantName, rating: 0, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐ 1점',         data: { restaurantName, rating: 1, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐ 2점',       data: { restaurantName, rating: 2, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐ 3점',     data: { restaurantName, rating: 3, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐ 4점',   data: { restaurantName, rating: 4, visitDate } },
       { type: 'Action.Execute', verb: 'review', title: '⭐⭐⭐⭐⭐ 5점', data: { restaurantName, rating: 5, visitDate } },
-      { type: 'Action.Execute', verb: 'review', title: '🚫 안먹음',      data: { restaurantName, rating: 0, visitDate } },
     ],
   });
 }
@@ -421,7 +434,7 @@ function buildRestaurantRow(r: Restaurant, userBlackSet: Set<number>, globalBlac
             wrap: true,
             ...(isGlobalBlacklisted ? { color: 'attention' } : {}),
           },
-          { type: 'TextBlock', text: detailText, size: 'small', isSubtle: true, spacing: 'none', wrap: true },
+          { type: 'TextBlock', text: detailText, isSubtle: true, spacing: 'none', wrap: true },
         ],
       },
       {
@@ -602,6 +615,9 @@ export function buildEditRestaurantCard(restaurant: Restaurant): Attachment {
         valueOff: 'false',
         spacing: 'small',
       },
+      { type: 'TextBlock', text: '🏷️ 태그', weight: 'bolder', spacing: 'small' },
+      { type: 'TextBlock', text: restaurant.tags ? `현재: ${restaurant.tags}` : 'AI 자동 생성됨 (수정 가능)', isSubtle: true, size: 'small', spacing: 'none' },
+      { type: 'Input.Text', id: 'tags', value: restaurant.tags ?? '', placeholder: '예: 매운맛,국물,고기' },
     ],
     actions: [
       { type: 'Action.Execute', verb: 'save_restaurant',  title: '✅ 저장', associatedInputs: 'auto', data: { restaurantId: restaurant.id } },

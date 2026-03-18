@@ -20,7 +20,7 @@ export class RecommendationServiceImpl implements RecommendationService {
     private settingRepo: SettingRepository
   ) {}
 
-  async getRecommendations(userId: string, previousNames: string[] = []): Promise<import('../core/types.js').RecommendationResult[]> {
+  async getRecommendations(userId: string, previousNames: string[] = [], userRequest?: string): Promise<import('../core/types.js').RecommendationResult[]> {
     // Get current weather
     const weather = await this.weatherService.getCurrent();
 
@@ -72,7 +72,20 @@ export class RecommendationServiceImpl implements RecommendationService {
     );
     const availableNames = new Set(availableRestaurants.map(r => r.name));
 
-    console.log(`[Recommend] available=${availableRestaurants.length}개, blacklisted=${blacklistedNames.length}개, recent=${recentVisits.join(',')}, lowRated=${lowRatedIds.size}개`);
+    // 거리 정렬 방향 결정
+    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
+    const wantFar = /멀|먼\s*곳|먼\s*데|멀리/.test(userRequest ?? '');
+    const wantNear = /가깝|가까운|가까이|근처/.test(userRequest ?? '');
+
+    let sortedForOllama = availableRestaurants;
+    if (wantFar) {
+      sortedForOllama = [...availableRestaurants].sort((a, b) => b.distance - a.distance);
+    } else if (wantNear || isRainy) {
+      sortedForOllama = [...availableRestaurants].sort((a, b) => a.distance - b.distance);
+    }
+
+    const sortLabel = wantFar ? '먼거리순' : (wantNear || isRainy) ? '가까운순' : '기본';
+    console.log(`[Recommend] available=${availableRestaurants.length}개, blacklisted=${blacklistedNames.length}개, recent=${recentVisits.join(',')}, lowRated=${lowRatedIds.size}개, 정렬=${sortLabel}${userRequest ? `, 요청="${userRequest}"` : ''}`);
 
     try {
       const recommendations = await this.ollamaService.recommend({
@@ -81,13 +94,15 @@ export class RecommendationServiceImpl implements RecommendationService {
         topRated,
         blacklisted: blacklistedNames,
         budget,
-        availableRestaurants: availableRestaurants.map(r => ({
+        availableRestaurants: sortedForOllama.map(r => ({
           name: r.name,
           category: r.category,
           price: r.price,
           distance: r.distance,
+          tags: r.tags,
         })),
         previousRecommendations: previousNames,
+        userRequest,
       });
 
       // DB에 존재하는 식당만 필터링
@@ -100,11 +115,58 @@ export class RecommendationServiceImpl implements RecommendationService {
         return this.getFallbackRecommendations(weather, allRestaurants, blacklistedNames, recentVisits);
       }
 
-      return validRecommendations.slice(0, 5);
+      // 후처리: 한국어 체크 + 카테고리/거리 보정 + 5개 보충
+      return this.postProcess(validRecommendations, availableRestaurants, weather, blacklistedNames, recentVisits);
     } catch (error) {
       console.error('Recommendation error:', error);
       return this.getFallbackRecommendations(weather, allRestaurants, blacklistedNames, recentVisits);
     }
+  }
+
+  private postProcess(
+    recs: import('../core/types.js').RecommendationResult[],
+    available: import('../core/types.js').Restaurant[],
+    weather: import('../core/types.js').WeatherInfo,
+    blacklisted: string[],
+    recentVisits: string[]
+  ): import('../core/types.js').RecommendationResult[] {
+    const restaurantMap = new Map(available.map(r => [r.name, r]));
+    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
+
+    // 1. LLM reason에서 핵심 키워드만 추출 + 카테고리·거리 항상 강제 append
+    const processed = recs.map(rec => {
+      const r = restaurantMap.get(rec.name);
+      if (!r) return rec;
+
+      const hasKorean = /[가-힣]/.test(rec.reason);
+      // LLM reason에서 · 이전 부분만 사용 (LLM이 붙인 카테고리/거리 제거)
+      const rawReason = hasKorean ? rec.reason.split('·')[0].trim() : this.buildWeatherKeyword(weather);
+      // 항상 DB의 카테고리·거리 append
+      const reason = `${rawReason} · ${r.category} · ${r.distance}m`;
+
+      return { ...rec, reason };
+    });
+
+    // 2. 5개 미만이면 나머지 채우기
+    if (processed.length < 5) {
+      const usedNames = new Set(processed.map(r => r.name));
+      const remaining = available
+        .filter(r => !usedNames.has(r.name) && !blacklisted.includes(r.name) && !recentVisits.includes(r.name));
+
+      const sorted = isRainy
+        ? remaining.sort((a, b) => a.distance - b.distance)
+        : remaining.sort(() => Math.random() - 0.5);
+
+      for (const r of sorted) {
+        if (processed.length >= 5) break;
+        processed.push({
+          name: r.name,
+          reason: this.buildFallbackReason(weather, r, r.category),
+        });
+      }
+    }
+
+    return processed.slice(0, 5);
   }
 
   private getFallbackRecommendations(
@@ -120,8 +182,9 @@ export class RecommendationServiceImpl implements RecommendationService {
     if (available.length === 0) return [];
 
     // Build category preference based on weather
+    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
     let categoryPreferences: string[] = [];
-    if (weather.condition.toLowerCase().includes('rain') || weather.condition.toLowerCase().includes('snow')) {
+    if (isRainy) {
       categoryPreferences = ['분식', '한식', '일식'];
     } else if (weather.temp < 10) {
       categoryPreferences = ['한식', '국물', '분식'];
@@ -131,8 +194,10 @@ export class RecommendationServiceImpl implements RecommendationService {
       categoryPreferences = ['일식', '한식', '중식'];
     }
 
-    // Shuffle to increase variety, then prioritize by weather
-    const shuffled = [...available].sort(() => Math.random() - 0.5);
+    // 비/눈 오는 날은 가까운 순, 그 외에는 랜덤
+    const shuffled = isRainy
+      ? [...available].sort((a, b) => a.distance - b.distance)
+      : [...available].sort(() => Math.random() - 0.5);
 
     // Group by category and pick one from each preferred category
     const selectedByCategory = new Map<string, import('../core/types.js').Restaurant>();
@@ -170,16 +235,25 @@ export class RecommendationServiceImpl implements RecommendationService {
     return results.slice(0, 5);
   }
 
+  private buildWeatherKeyword(weather: import('../core/types.js').WeatherInfo): string {
+    if (weather.condition === 'rain') return '비오는날';
+    if (weather.condition === 'snow') return '눈오는날';
+    if (weather.temp < 10) return '추운날';
+    if (weather.temp > 25) return '더운날';
+    return '오늘추천';
+  }
+
   private buildFallbackReason(
     weather: import('../core/types.js').WeatherInfo,
     restaurant: import('../core/types.js').Restaurant,
     _category: string
   ): string {
     const weatherReason = (() => {
-      if (weather.condition === 'rain' || weather.condition === 'snow') return '비/눈 오는 날';
-      if (weather.temp < 10) return '추운 날';
-      if (weather.temp > 25) return '더운 날';
-      return '오늘 날씨';
+      if (weather.condition === 'rain') return `비가 오니 가까운 거리 추천`;
+      if (weather.condition === 'snow') return `눈이 오니 가까운 거리 추천`;
+      if (weather.temp < 10) return '추운 날 따뜻한 메뉴';
+      if (weather.temp > 25) return '더운 날 시원한 메뉴';
+      return '오늘 날씨에 어울리는';
     })();
 
     return `${weatherReason} · ${restaurant.category} · ${restaurant.distance}m`;

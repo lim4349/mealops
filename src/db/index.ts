@@ -182,6 +182,16 @@ export class SqliteDatabase {
       // Column already exists
     }
 
+    // Migration 6: Add tags to restaurants
+    try {
+      const columns = this.db.pragma('table_info(restaurants)') as any[];
+      if (!columns.some(col => col.name === 'tags')) {
+        this.db.exec("ALTER TABLE restaurants ADD COLUMN tags TEXT DEFAULT ''");
+      }
+    } catch {
+      // Column already exists
+    }
+
     // Migration 5: Allow rating=0 (안먹음) in reviews
     try {
       const tableInfo = this.db.prepare(

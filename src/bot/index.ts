@@ -144,33 +144,36 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'recommend': {
+          const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
           const cached = this.recommendCache.get(today);
           let recommendations: RecommendationResult[];
-          if (cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
+          // userRequest가 있으면 캐시 무시하고 새로 추천
+          if (!userRequest && cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
             recommendations = cached.data;
           } else {
-            recommendations = await this.deps.recommendationService.getRecommendations(userId);
-            if (recommendations.length > 0) {
+            recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
+            if (recommendations.length > 0 && !userRequest) {
               this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
             }
           }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
           }
-          return this.cardResponse(buildRecommendCard(recommendations));
+          return this.cardResponse(buildRecommendCard(recommendations, userRequest));
         }
 
         case 'refresh_recommend': {
+          const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
           const previousNames = (this.recommendCache.get(today)?.data ?? []).map(r => r.name);
           this.recommendCache.delete(today);
-          const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames);
-          if (recommendations.length > 0) {
+          const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
+          if (recommendations.length > 0 && !userRequest) {
             this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
           }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
           }
-          return this.cardResponse(buildRecommendCard(recommendations));
+          return this.cardResponse(buildRecommendCard(recommendations, userRequest));
         }
 
         case 'show_list': {
@@ -196,7 +199,7 @@ export class MeaLOpsBot extends ActivityHandler {
           if (!name || !category) {
             return this.cardResponse(buildResponseCard('식당 이름과 카테고리는 필수입니다.', true));
           }
-          this.deps.restaurantRepo.create({
+          const restaurant = this.deps.restaurantRepo.create({
             name: String(name).trim(),
             alias: alias ? String(alias).trim() : undefined,
             category,
@@ -204,6 +207,10 @@ export class MeaLOpsBot extends ActivityHandler {
             price: Number(price) || 0,
             is_delivery: is_delivery === 'true',
           });
+          // 태그 자동 생성 (비동기, 완료 후 업데이트)
+          this.deps.ollamaService.generateTags(restaurant.name, restaurant.category).then(tags => {
+            if (tags) this.deps.restaurantRepo.update(restaurant.id, { tags });
+          }).catch(() => {});
           return this.cardResponse(this.buildListCardForUser(userId));
         }
 
@@ -216,7 +223,7 @@ export class MeaLOpsBot extends ActivityHandler {
         }
 
         case 'save_restaurant': {
-          const { restaurantId, name, alias, category, distance, price, is_delivery } = data;
+          const { restaurantId, name, alias, category, distance, price, is_delivery, tags } = data;
           this.deps.restaurantRepo.update(restaurantId, {
             name: name ? String(name).trim() : undefined,
             alias: alias !== undefined ? (String(alias).trim() || undefined) : undefined,
@@ -224,6 +231,7 @@ export class MeaLOpsBot extends ActivityHandler {
             distance: distance !== undefined ? Number(distance) : undefined,
             price: price !== undefined ? Number(price) : undefined,
             is_delivery: is_delivery !== undefined ? is_delivery === 'true' : undefined,
+            tags: tags !== undefined ? String(tags).trim() : undefined,
           });
           return this.cardResponse(this.buildListCardForUser(userId));
         }

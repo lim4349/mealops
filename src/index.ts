@@ -247,10 +247,25 @@ app.listen(port, () => {
   // Start scheduler
   scheduler.start();
 
-  // Check Ollama connection
-  ollamaService.checkConnection().then(connected => {
+  // Check Ollama connection + warmup + 태그 자동 생성
+  ollamaService.checkConnection().then(async connected => {
     if (connected) {
       console.log('✅ Ollama connected');
+      await ollamaService.warmup();
+      console.log('✅ Ollama warmup complete');
+
+      // 태그 없는 기존 식당 자동 태그 생성 (백그라운드)
+      const untagged = restaurantRepo.findAll(false).filter(r => !r.tags);
+      if (untagged.length > 0) {
+        console.log(`[Tags] 태그 없는 식당 ${untagged.length}개 자동 생성 시작`);
+        (async () => {
+          for (const r of untagged) {
+            const tags = await ollamaService.generateTags(r.name, r.category);
+            if (tags) restaurantRepo.update(r.id, { tags });
+          }
+          console.log(`[Tags] 자동 태그 생성 완료`);
+        })();
+      }
     } else {
       console.log('⚠️ Ollama not available, using fallback recommendations');
     }

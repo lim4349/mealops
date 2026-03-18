@@ -8,6 +8,7 @@ export interface Restaurant {
   price: number;
   is_active: boolean;
   is_delivery?: boolean;
+  tags?: string; // 쉼표 구분 태그 (예: "매운맛,국물,고기")
 }
 
 export type RestaurantCategory = '한식' | '일식' | '중식' | '양식' | '분식' | '기타';
@@ -68,6 +69,7 @@ export interface CreateRestaurantDto {
   distance: number;
   price: number;
   is_delivery?: boolean;
+  tags?: string;
 }
 
 export interface VoterEntry {
@@ -238,6 +240,8 @@ export interface SettingRepository {
 // Service Interfaces
 export interface OllamaService {
   recommend(context: RecommendationContext): Promise<RecommendationResult[]>;
+  generateTags(name: string, category: string): Promise<string>;
+  warmup(): Promise<void>;
 }
 
 export interface RecommendationContext {
@@ -246,8 +250,9 @@ export interface RecommendationContext {
   topRated: string[];
   blacklisted: string[];
   budget: number;
-  availableRestaurants: { name: string; category: string; price: number; distance: number }[];
+  availableRestaurants: { name: string; category: string; price: number; distance: number; tags?: string }[];
   previousRecommendations?: string[];
+  userRequest?: string;
 }
 
 export interface WeatherService {
@@ -255,7 +260,7 @@ export interface WeatherService {
 }
 
 export interface RecommendationService {
-  getRecommendations(userId: string, previousNames?: string[]): Promise<RecommendationResult[]>;
+  getRecommendations(userId: string, previousNames?: string[], userRequest?: string): Promise<RecommendationResult[]>;
 }
 
 export interface VoteService {

@@ -24,8 +24,8 @@ export class RestaurantRepositoryImpl implements RestaurantRepository {
 
   create(dto: CreateRestaurantDto): Restaurant {
     this.db.run(
-      'INSERT INTO restaurants (name, alias, category, distance, price, is_delivery) VALUES (?, ?, ?, ?, ?, ?)',
-      [dto.name, dto.alias ?? null, dto.category, dto.distance, dto.price, dto.is_delivery ? 1 : 0]
+      'INSERT INTO restaurants (name, alias, category, distance, price, is_delivery, tags) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [dto.name, dto.alias ?? null, dto.category, dto.distance, dto.price, dto.is_delivery ? 1 : 0, dto.tags ?? '']
     );
     const created = this.findByName(dto.name);
     if (!created) throw new Error('Failed to create restaurant');
@@ -83,6 +83,7 @@ export class RestaurantRepositoryImpl implements RestaurantRepository {
     if (dto.distance !== undefined) { fields.push('distance = ?'); params.push(Number(dto.distance)); }
     if (dto.price !== undefined) { fields.push('price = ?'); params.push(Number(dto.price)); }
     if (dto.is_delivery !== undefined) { fields.push('is_delivery = ?'); params.push(dto.is_delivery ? 1 : 0); }
+    if (dto.tags !== undefined) { fields.push('tags = ?'); params.push(dto.tags); }
     if (fields.length === 0) return;
     params.push(id);
     this.db.run(`UPDATE restaurants SET ${fields.join(', ')} WHERE id = ?`, params);
