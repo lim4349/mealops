@@ -38,6 +38,7 @@ export class SchedulerImpl implements Scheduler {
 
   private lastVoteTime = '';
   private lastDecisionTime = '';
+  private lastReviewTime = '';
 
   start(): void {
     const voteHour = process.env.VOTE_HOUR ?? '11';
@@ -77,6 +78,15 @@ export class SchedulerImpl implements Scheduler {
         console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
         if (!this.isHoliday(kstTime) && this.settingRepo.getForceDecisionEnabled()) {
           await this.makeForceDecision();
+        }
+      }
+
+      // 리뷰 알림 (평일만, KST 12:50)
+      if (hm === '12:50' && this.lastReviewTime !== hm && kstTime.getDay() >= 1 && kstTime.getDay() <= 5) {
+        this.lastReviewTime = hm;
+        console.log('[REVIEW] 스케줄 실행: 12:50');
+        if (!this.isHoliday(kstTime)) {
+          await this.sendReviewReminder();
         }
       }
     }, 1000); // 1초마다 확인
