@@ -936,7 +936,9 @@ export function buildDashboardCard(
       }
     }
 
-    // 달력 셀 렌더링 (버튼 없음, 이모지만)
+    const todayStr = today.toISOString().split('T')[0];
+
+    // 달력 셀 렌더링
     weeks.forEach((week, weekIdx) => {
       const dayCols: any[] = week.map(dateStr => {
         const dayNum = dateStr ? parseInt(dateStr.slice(8), 10) : null;
@@ -946,6 +948,7 @@ export function buildDashboardCard(
         const truncated = restaurantName.length > 5 ? restaurantName.slice(0, 5) + '…' : restaurantName;
         const reviewRating = h ? (reviewMap.get(`${h.restaurant_id}_${dateStr}`) ?? -1) : -1;
         const reviewEmoji = reviewRating === -1 ? '⭐' : reviewRating === 0 ? '🚫' : '✅';
+        const isPast = !!dateStr && dateStr < todayStr;
 
         const items: any[] = [];
         if (dayNum !== null) {
@@ -957,7 +960,11 @@ export function buildDashboardCard(
           items.push({ type: 'TextBlock', text: truncated, size: 'small', horizontalAlignment: 'center', spacing: 'none', wrap: false });
           items.push({ type: 'TextBlock', text: reviewEmoji, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
         } else if (dayNum !== null) {
-          items.push({ type: 'TextBlock', text: '·', isSubtle: true, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
+          if (isPast) {
+            items.push({ type: 'ActionSet', spacing: 'none', actions: [{ type: 'Action.Execute', verb: 'add_history_form', title: '+', data: { date: dateStr, view } }] });
+          } else {
+            items.push({ type: 'TextBlock', text: '·', isSubtle: true, horizontalAlignment: 'center', spacing: 'none', size: 'small' });
+          }
         }
         return { type: 'Column', width: '1', items };
       });
@@ -1009,6 +1016,45 @@ export function buildDashboardCard(
       body.push({ type: 'TextBlock', text: '✅ 이번 기간 리뷰 완료', isSubtle: true, spacing: 'medium', size: 'small' });
     }
   }
+
+  return CardFactory.adaptiveCard({
+    $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+    type: 'AdaptiveCard',
+    version: '1.4',
+    body,
+  });
+}
+
+export function buildAddHistoryCard(date: string, restaurants: Restaurant[]): Attachment {
+  const d = new Date(date + 'T00:00:00');
+  const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
+  const dateLabel = `${date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
+
+  const body: any[] = [
+    buildTopMenuActionSet(),
+    { type: 'TextBlock', text: `📝 ${dateLabel} 점심 기록 추가`, weight: 'bolder', size: 'large', spacing: 'small' },
+    { type: 'TextBlock', text: '어디서 먹었나요?', isSubtle: true, spacing: 'small' },
+  ];
+
+  const active = restaurants.filter(r => r.is_active);
+  for (let i = 0; i < active.length; i += 3) {
+    body.push({
+      type: 'ActionSet',
+      spacing: 'small',
+      actions: active.slice(i, i + 3).map(r => ({
+        type: 'Action.Execute',
+        verb: 'add_history',
+        title: r.name,
+        data: { date, restaurantId: r.id },
+      })),
+    });
+  }
+
+  body.push({
+    type: 'ActionSet',
+    spacing: 'medium',
+    actions: [{ type: 'Action.Execute', verb: 'dashboard', title: '취소', data: {} }],
+  });
 
   return CardFactory.adaptiveCard({
     $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',

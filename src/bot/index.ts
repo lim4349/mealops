@@ -22,6 +22,7 @@ import {
   buildBlacklistCard,
   buildSettingsCard,
   buildDashboardCard,
+  buildAddHistoryCard,
   buildResponseCard,
   buildReviewCard,
   buildEditRestaurantCard,
@@ -385,6 +386,40 @@ export class MeaLOpsBot extends ActivityHandler {
           const userReviews = this.deps.reviewRepo.findByUser(userId);
           const reviewMap = new Map(userReviews.map(r => [`${r.restaurant_id}_${r.visit_date}`, r.rating] as [string, number]));
           return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, view, reviewMap, allTimeHistory));
+        }
+
+        case 'add_history_form': {
+          const { date: ahDate } = data;
+          if (!ahDate || ahDate >= today) {
+            return this.cardResponse(buildResponseCard('과거 날짜만 기록을 추가할 수 있습니다.', true));
+          }
+          const existing = this.deps.historyRepo.findByDate(ahDate);
+          if (existing) {
+            return this.cardResponse(buildResponseCard('해당 날짜에 이미 기록이 있습니다.', true));
+          }
+          const allRestaurants = this.deps.restaurantRepo.findAll(true);
+          return this.cardResponse(buildAddHistoryCard(ahDate, allRestaurants));
+        }
+
+        case 'add_history': {
+          const { date: ahDate, restaurantId: ahRestId } = data;
+          if (!ahDate || ahDate >= today) {
+            return this.cardResponse(buildResponseCard('과거 날짜만 기록을 추가할 수 있습니다.', true));
+          }
+          const existing = this.deps.historyRepo.findByDate(ahDate);
+          if (existing) {
+            return this.cardResponse(buildResponseCard('해당 날짜에 이미 기록이 있습니다.', true));
+          }
+          const restaurant = this.deps.restaurantRepo.findById(Number(ahRestId));
+          if (!restaurant) {
+            return this.cardResponse(buildResponseCard('식당을 찾을 수 없습니다.', true));
+          }
+          this.deps.historyRepo.add(restaurant.id, ahDate, 0);
+          const history = this.deps.historyRepo.findRecent(90);
+          const allTimeHistory = this.deps.historyRepo.findAll();
+          const userReviews = this.deps.reviewRepo.findByUser(userId);
+          const reviewMap = new Map(userReviews.map(r => [`${r.restaurant_id}_${r.visit_date}`, r.rating] as [string, number]));
+          return this.cardResponse(buildDashboardCard(history, this.deps.restaurantRepo, 'week', reviewMap, allTimeHistory));
         }
 
         case 'show_review': {
