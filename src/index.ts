@@ -141,6 +141,8 @@ async function sendNotification(message: string, card?: any): Promise<void> {
 
   // Also send to all stored conversation references (other chats)
   for (const [, reference] of conversationReferences) {
+    // Skip if already sent to this group chat via groupChatId
+    if (groupChatId && reference.conversation?.id === groupChatId) continue;
     try {
       await (adapter as any).continueConversation(reference, async (context: any) => {
         await context.sendActivity(card ? MessageFactory.attachment(card) : message);
