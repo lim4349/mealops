@@ -511,11 +511,16 @@ export class MeaLOpsBot extends ActivityHandler {
       ? (this.recommendCache.get(cacheKey)?.data ?? []).map(r => r.name)
       : [];
 
+    console.log(
+      `[recommend] user=${userId} refresh=${refresh} request="${userRequest ?? ''}" previous=${previousNames.join(', ')}`
+    );
+
     if (refresh) {
       this.recommendCache.delete(cacheKey);
     }
 
     const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
+    console.log(`[recommend] result=${recommendations.map(r => r.name).join(', ')}`);
     if (recommendations.length === 0) {
       return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
     }

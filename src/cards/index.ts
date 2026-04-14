@@ -279,9 +279,26 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
     return `${left} / ${field} / ${distance ?? 0}m`;
   };
 
+  const summaryLabel = userRequest ? `"${userRequest}" 조건 반영` : '기본 추천 모드';
+
   const body: any[] = [
     buildTopMenuActionSet(),
     { type: 'TextBlock', text: '🤖 AI 추천 메뉴', weight: 'bolder', size: 'large' },
+    {
+      type: 'TextBlock',
+      text: '추천 탭 v2',
+      color: 'accent',
+      weight: 'bolder',
+      size: 'small',
+      spacing: 'none',
+    },
+    {
+      type: 'TextBlock',
+      text: `현재 기준: ${summaryLabel}`,
+      wrap: true,
+      spacing: 'none',
+      size: 'small',
+    },
     {
       type: 'TextBlock',
       text: '입력이 없으면 날씨, 거리, 방문 빈도를 보고 추천합니다. 입력이 있으면 그 조건을 우선 반영합니다.',
