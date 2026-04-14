@@ -157,15 +157,9 @@ export class MeaLOpsBot extends ActivityHandler {
         case 'recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
           const cacheKey = this.getRecommendCacheKey(today, userRequest);
-          const cached = this.recommendCache.get(cacheKey);
-          let recommendations: RecommendationResult[];
-          if (cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
-            recommendations = cached.data;
-          } else {
-            recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
-            if (recommendations.length > 0) {
-              this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
-            }
+          const recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
+          if (recommendations.length > 0) {
+            this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
           }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
