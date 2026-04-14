@@ -38,7 +38,11 @@ export class MeaLOpsBot extends ActivityHandler {
   private deps: Dependencies;
 
   // AI 추천 캐시 (키: YYYY-MM-DD|userRequest)
-  private recommendCache = new Map<string, { data: RecommendationResult[]; timestamp: number }>();
+  private recommendCache = new Map<string, {
+    data: RecommendationResult[];
+    timestamp: number;
+    seenNames: string[];
+  }>();
   private readonly RECOMMEND_CACHE_TTL = 60 * 60 * 1000; // 1시간
 
   constructor(dependencies: Dependencies) {
@@ -164,7 +168,11 @@ export class MeaLOpsBot extends ActivityHandler {
           } else {
             recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
             if (recommendations.length > 0) {
-              this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
+              this.recommendCache.set(cacheKey, {
+                data: recommendations,
+                timestamp: Date.now(),
+                seenNames: recommendations.map(r => r.name),
+              });
             }
           }
           if (recommendations.length === 0) {
@@ -176,11 +184,28 @@ export class MeaLOpsBot extends ActivityHandler {
         case 'refresh_recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
           const cacheKey = this.getRecommendCacheKey(today, userRequest);
-          const previousNames = (this.recommendCache.get(cacheKey)?.data ?? []).map(r => r.name);
-          this.recommendCache.delete(cacheKey);
-          const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
+          const cached = this.recommendCache.get(cacheKey);
+          const seenNames = new Set(cached?.seenNames ?? (cached?.data ?? []).map(r => r.name));
+
+          let recommendations = await this.deps.recommendationService.getRecommendations(
+            userId,
+            Array.from(seenNames),
+            userRequest
+          );
+
+          // 후보를 다 소진했다면 누적 제외를 초기화하고 다시 시작
+          if (recommendations.length === 0 && seenNames.size > 0) {
+            seenNames.clear();
+            recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
+          }
+
           if (recommendations.length > 0) {
-            this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
+            recommendations.forEach(r => seenNames.add(r.name));
+            this.recommendCache.set(cacheKey, {
+              data: recommendations,
+              timestamp: Date.now(),
+              seenNames: Array.from(seenNames),
+            });
           }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
