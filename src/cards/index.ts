@@ -274,12 +274,26 @@ export function buildVoteCard(
 
 // Recommendation card - 제목 우측 새로고침 인라인 + 투표 버튼
 export function buildRecommendCard(recommendations: RecommendationResult[], userRequest?: string): Attachment {
-  const formatRecommendationReason = (reason?: string, category?: string): string => {
+  const formatRecommendationLine = (reason?: string, category?: string, distance?: number): string => {
     const trimmedReason = (reason ?? '').trim();
     const trimmedCategory = (category ?? '').trim();
-    if (!trimmedReason) return '오늘 추천';
-    if (trimmedCategory && trimmedReason === trimmedCategory) return '오늘 추천';
-    return trimmedReason;
+    const parts: string[] = [];
+
+    const isMeaningfulReason =
+      !!trimmedReason &&
+      trimmedReason !== trimmedCategory &&
+      trimmedReason !== '오늘 추천' &&
+      !trimmedReason.includes(trimmedCategory);
+
+    if (isMeaningfulReason) {
+      parts.push(`이유: ${trimmedReason}`);
+    }
+    if (trimmedCategory) {
+      parts.push(`분야: ${trimmedCategory}`);
+    }
+    parts.push(`거리: ${distance ?? 0}m`);
+
+    return parts.join(' · ');
   };
 
   const body: any[] = [
@@ -340,7 +354,7 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
             },
             {
               type: 'TextBlock',
-              text: `${formatRecommendationReason(r.reason, r.category)} / ${r.category ?? ''} / ${r.distance ?? 0}m`,
+              text: formatRecommendationLine(r.reason, r.category, r.distance),
               wrap: true,
               spacing: 'small',
             },
