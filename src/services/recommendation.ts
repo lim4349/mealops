@@ -69,8 +69,7 @@ export class RecommendationServiceImpl implements RecommendationService {
     const availableRestaurants = allRestaurants.filter(r =>
       !blacklistedNames.includes(r.name) &&
       !recentVisits.includes(r.name) &&
-      !lowRatedIds.has(r.id) &&
-      !previousNameSet.has(r.name)
+      !lowRatedIds.has(r.id)
     );
     const availableNames = new Set(availableRestaurants.map(r => r.name));
 
@@ -79,11 +78,12 @@ export class RecommendationServiceImpl implements RecommendationService {
     const wantFar = /멀|먼\s*곳|먼\s*데|멀리/.test(userRequest ?? '');
     const wantNear = /가깝|가까운|가까이|근처/.test(userRequest ?? '');
 
-    let sortedForOllama = availableRestaurants;
+    const shuffledAvailable = this.shuffleRestaurants(availableRestaurants);
+    let sortedForOllama = shuffledAvailable;
     if (wantFar) {
-      sortedForOllama = [...availableRestaurants].sort((a, b) => b.distance - a.distance);
+      sortedForOllama = [...shuffledAvailable].sort((a, b) => b.distance - a.distance);
     } else if (wantNear || isRainy) {
-      sortedForOllama = [...availableRestaurants].sort((a, b) => a.distance - b.distance);
+      sortedForOllama = [...shuffledAvailable].sort((a, b) => a.distance - b.distance);
     }
 
     const sortLabel = wantFar ? '먼거리순' : (wantNear || isRainy) ? '가까운순' : '기본';
@@ -114,21 +114,22 @@ export class RecommendationServiceImpl implements RecommendationService {
       // If no valid recommendations, return fallback
       if (validRecommendations.length === 0) {
         console.log('[Recommend] → fallback 사용');
-        return this.getFallbackRecommendations(weather, availableRestaurants);
+        return this.getFallbackRecommendations(weather, availableRestaurants, previousNameSet);
       }
 
       // 후처리: 한국어 체크 + 카테고리/거리 보정 + 5개 보충
-      return this.postProcess(validRecommendations, availableRestaurants, weather);
+      return this.postProcess(validRecommendations, availableRestaurants, weather, previousNameSet);
     } catch (error) {
       console.error('Recommendation error:', error);
-      return this.getFallbackRecommendations(weather, availableRestaurants);
+      return this.getFallbackRecommendations(weather, availableRestaurants, previousNameSet);
     }
   }
 
   private postProcess(
     recs: import('../core/types.js').RecommendationResult[],
     available: import('../core/types.js').Restaurant[],
-    weather: import('../core/types.js').WeatherInfo
+    weather: import('../core/types.js').WeatherInfo,
+    previousNameSet: Set<string>
   ): import('../core/types.js').RecommendationResult[] {
     const restaurantMap = new Map(available.map(r => [r.name, r]));
     const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
@@ -155,12 +156,13 @@ export class RecommendationServiceImpl implements RecommendationService {
       }];
     });
 
-    return this.expandToFive(normalized, available, weather, isRainy);
+    return this.expandToFive(normalized, available, weather, isRainy, previousNameSet);
   }
 
   private getFallbackRecommendations(
     weather: import('../core/types.js').WeatherInfo,
-    restaurants: import('../core/types.js').Restaurant[]
+    restaurants: import('../core/types.js').Restaurant[],
+    previousNameSet: Set<string>
   ): import('../core/types.js').RecommendationResult[] {
     if (restaurants.length === 0) return [];
 
@@ -179,11 +181,12 @@ export class RecommendationServiceImpl implements RecommendationService {
 
     // 비/눈 오는 날은 가까운 순, 그 외에는 랜덤
     const ordered = isRainy
-      ? [...restaurants].sort((a, b) => a.distance - b.distance)
-      : [...restaurants].sort(() => Math.random() - 0.5);
+      ? this.shuffleRestaurants(restaurants).sort((a, b) => a.distance - b.distance)
+      : this.shuffleRestaurants(restaurants);
 
     const preferred = categoryPreferences.flatMap(category => {
-      const picked = ordered.find(r => r.category === category);
+      const picked = ordered.find(r => r.category === category && !previousNameSet.has(r.name))
+        ?? ordered.find(r => r.category === category);
       if (!picked) return [];
       return [{
         name: picked.name,
@@ -194,20 +197,22 @@ export class RecommendationServiceImpl implements RecommendationService {
       }];
     });
 
-    return this.expandToFive(preferred, ordered, weather, isRainy);
+    return this.expandToFive(preferred, ordered, weather, isRainy, previousNameSet);
   }
 
   private expandToFive(
     seeds: import('../core/types.js').RecommendationResult[],
     available: import('../core/types.js').Restaurant[],
     weather: import('../core/types.js').WeatherInfo,
-    isRainy: boolean
+    isRainy: boolean,
+    previousNameSet: Set<string>
   ): import('../core/types.js').RecommendationResult[] {
     const restaurantMap = new Map(available.map(r => [r.name, r]));
     const selected: import('../core/types.js').RecommendationResult[] = [];
     const usedNames = new Set<string>();
     const usedCategories = new Set<string>();
-    const overflow: import('../core/types.js').RecommendationResult[] = [];
+    const freshSeeds: import('../core/types.js').RecommendationResult[] = [];
+    const repeatedSeeds: import('../core/types.js').RecommendationResult[] = [];
 
     for (const rec of seeds) {
       const restaurant = restaurantMap.get(rec.name);
@@ -221,45 +226,70 @@ export class RecommendationServiceImpl implements RecommendationService {
         reason: rec.reason || this.buildFallbackReason(weather, restaurant, restaurant.category),
       };
 
-      if (!usedCategories.has(restaurant.category)) {
-        selected.push(normalized);
-        usedNames.add(rec.name);
-        usedCategories.add(restaurant.category);
+      if (previousNameSet.has(rec.name)) {
+        repeatedSeeds.push(normalized);
       } else {
-        overflow.push(normalized);
+        freshSeeds.push(normalized);
       }
     }
 
-    for (const rec of overflow) {
-      if (selected.length >= 5) break;
-      if (usedNames.has(rec.name)) continue;
-      selected.push(rec);
-      usedNames.add(rec.name);
+    for (const bucket of [freshSeeds, repeatedSeeds]) {
+      for (const rec of bucket) {
+        if (selected.length >= 5) break;
+        if (usedNames.has(rec.name)) continue;
+        if (!usedCategories.has(rec.category ?? '')) {
+          selected.push(rec);
+          usedNames.add(rec.name);
+          if (rec.category) usedCategories.add(rec.category);
+        }
+      }
+    }
+
+    for (const bucket of [freshSeeds, repeatedSeeds]) {
+      for (const rec of bucket) {
+        if (selected.length >= 5) break;
+        if (usedNames.has(rec.name)) continue;
+        selected.push(rec);
+        usedNames.add(rec.name);
+        if (rec.category) usedCategories.add(rec.category);
+      }
     }
 
     const remaining = isRainy
-      ? [...available].sort((a, b) => a.distance - b.distance)
-      : [...available].sort(() => Math.random() - 0.5);
+      ? this.shuffleRestaurants(available).sort((a, b) => a.distance - b.distance)
+      : this.shuffleRestaurants(available);
 
     for (const preferUnusedCategory of [true, false]) {
-      for (const restaurant of remaining) {
-        if (selected.length >= 5) break;
-        if (usedNames.has(restaurant.name)) continue;
-        if (preferUnusedCategory && usedCategories.has(restaurant.category)) continue;
+      for (const preferFresh of [true, false]) {
+        for (const restaurant of remaining) {
+          if (selected.length >= 5) break;
+          if (usedNames.has(restaurant.name)) continue;
+          if (preferUnusedCategory && usedCategories.has(restaurant.category)) continue;
+          if (preferFresh && previousNameSet.has(restaurant.name)) continue;
 
-        selected.push({
-          name: restaurant.name,
-          reason: this.buildFallbackReason(weather, restaurant, restaurant.category),
-          category: restaurant.category,
-          distance: restaurant.distance,
-          price: restaurant.price,
-        });
-        usedNames.add(restaurant.name);
-        usedCategories.add(restaurant.category);
+          selected.push({
+            name: restaurant.name,
+            reason: this.buildFallbackReason(weather, restaurant, restaurant.category),
+            category: restaurant.category,
+            distance: restaurant.distance,
+            price: restaurant.price,
+          });
+          usedNames.add(restaurant.name);
+          usedCategories.add(restaurant.category);
+        }
       }
     }
 
     return selected.slice(0, 5);
+  }
+
+  private shuffleRestaurants<T>(items: T[]): T[] {
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
   }
 
   private buildWeatherKeyword(weather: import('../core/types.js').WeatherInfo): string {
