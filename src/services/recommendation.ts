@@ -30,7 +30,7 @@ interface QueryPreference {
 interface RankedCandidate {
   restaurant: Restaurant;
   score: number;
-  reason: string;
+  label: string;
 }
 
 export class RecommendationServiceImpl implements RecommendationService {
@@ -73,31 +73,124 @@ export class RecommendationServiceImpl implements RecommendationService {
     const available = restaurants.filter(r => !blacklisted.has(r.name));
     if (available.length === 0) return [];
 
-    const ranked = available.map(restaurant => {
-      const score = this.scoreRestaurant({
-        restaurant,
-        weather,
-        preference,
-        recent3,
-        visits90,
-        previousSet,
-        budget,
-      });
-      const reason = this.buildReason(restaurant, weather, preference, recent3, visits90);
-      return { restaurant, score, reason };
-    });
+    const ranked = available
+      .map(restaurant => this.rankRestaurant(restaurant, weather, preference, recent3, visits90, previousSet, budget))
+      .sort((a, b) => b.score - a.score);
 
-    ranked.sort((a, b) => b.score - a.score);
-    const selected = this.pickTopFive(ranked, preference);
-    const rotated = this.rotateIfSameFirst(selected, previousNames);
+    const selected = this.selectRecommendations(ranked, preference, previousSet);
 
-    return rotated.map(item => ({
+    return selected.map(item => ({
       name: item.restaurant.name,
-      reason: item.reason,
+      reason: item.label,
       category: item.restaurant.category,
       distance: item.restaurant.distance,
       price: item.restaurant.price,
     }));
+  }
+
+  private rankRestaurant(
+    restaurant: Restaurant,
+    weather: WeatherInfo,
+    preference: QueryPreference,
+    recent3: Set<string>,
+    visits90: Map<number, number>,
+    previousSet: Set<string>,
+    budget: number
+  ): RankedCandidate {
+    const tags = this.parseTags(restaurant.tags);
+    const rating = this.reviewRepo.getAverageRating(restaurant.id);
+    const visitCount = visits90.get(restaurant.id) ?? 0;
+    const distance = restaurant.distance ?? 0;
+    const rainy = weather.condition === 'rain' || weather.condition === 'snow';
+
+    let score = 0;
+
+    score += Math.random() * (preference.hasQuery ? 0.9 : 1.8);
+    score += Math.max(0.6, 2.6 - distance / 140);
+    score += Math.max(0, rating) * 0.65;
+    score -= visitCount * 0.38;
+    if (recent3.has(restaurant.name)) score -= 2.2;
+    if (previousSet.has(restaurant.name)) score -= preference.hasQuery ? 1.4 : 2.0;
+    if (restaurant.price > budget) score -= 0.9;
+
+    if (rainy) score += Math.max(0, 2.4 - distance / 110);
+    if (weather.temp <= 10 && this.matchesAnyTag(tags, ['국밥', '탕', '찌개', '국물', '라멘', '우동'])) score += 1.9;
+    if (weather.temp >= 25 && this.matchesAnyTag(tags, ['냉면', '쌀국수', '면', '시원'])) score += 1.8;
+
+    if (preference.near) score += Math.max(0, 3.0 - distance / 90);
+    if (preference.far) score += Math.min(2.2, distance / 180);
+
+    if (preference.categories.size > 0 && preference.categories.has(restaurant.category)) {
+      score += 4.4;
+    }
+
+    if (preference.spicy && this.matchesAnyTag(tags, ['매운', '마라', '얼큰'])) score += 2.6;
+    if (preference.soup && this.matchesAnyTag(tags, ['국물', '탕', '찌개', '국밥'])) score += 2.4;
+    if (preference.noodle && this.matchesAnyTag(tags, ['냉면', '라멘', '우동', '국수', '쌀국수', '면'])) score += 2.2;
+    if (preference.rice && this.matchesAnyTag(tags, ['덮밥', '비빔밥', '볶음밥', '국밥', '밥'])) score += 2.0;
+    if (preference.meat && this.matchesAnyTag(tags, ['고기', '갈비', '불고기', '삼겹', '돈까스'])) score += 2.0;
+    if (preference.coolFood && this.matchesAnyTag(tags, ['냉면', '시원', '냉', '쌀국수'])) score += 2.1;
+    if (preference.warmFood && this.matchesAnyTag(tags, ['국물', '탕', '찌개', '해장', '국밥'])) score += 2.1;
+
+    const label = this.buildDisplayLabel(restaurant, tags, weather, preference, recent3, visitCount);
+    return { restaurant, score, label };
+  }
+
+  private selectRecommendations(
+    ranked: RankedCandidate[],
+    preference: QueryPreference,
+    previousSet: Set<string>
+  ): RankedCandidate[] {
+    const selected: RankedCandidate[] = [];
+    const usedNames = new Set<string>();
+    const usedCategories = new Set<string>();
+    const poolSize = Math.min(ranked.length, preference.hasQuery ? 12 : 16);
+    const pool = ranked.slice(0, poolSize);
+
+    while (selected.length < 5) {
+      const remaining = pool.filter(item => !usedNames.has(item.restaurant.name));
+      if (remaining.length === 0) break;
+
+      const minScore = Math.min(...remaining.map(item => item.score));
+      const weighted = remaining.map(item => {
+        let weight = Math.max(0.2, item.score - minScore + 1.25);
+        if (previousSet.has(item.restaurant.name)) weight *= preference.hasQuery ? 0.55 : 0.35;
+        if ((!preference.hasQuery || preference.categories.size === 0) && !usedCategories.has(item.restaurant.category)) {
+          weight *= 1.25;
+        } else if (!preference.hasQuery && usedCategories.has(item.restaurant.category)) {
+          weight *= 0.85;
+        }
+        return { item, weight };
+      });
+
+      const picked = this.pickWeighted(weighted);
+      if (!picked) break;
+
+      selected.push(picked);
+      usedNames.add(picked.restaurant.name);
+      usedCategories.add(picked.restaurant.category);
+    }
+
+    for (const item of ranked) {
+      if (selected.length >= 5) break;
+      if (usedNames.has(item.restaurant.name)) continue;
+      selected.push(item);
+      usedNames.add(item.restaurant.name);
+    }
+
+    return selected.slice(0, 5);
+  }
+
+  private pickWeighted(items: Array<{ item: RankedCandidate; weight: number }>): RankedCandidate | undefined {
+    const total = items.reduce((sum, item) => sum + item.weight, 0);
+    if (total <= 0) return items[0]?.item;
+
+    let cursor = Math.random() * total;
+    for (const entry of items) {
+      cursor -= entry.weight;
+      if (cursor <= 0) return entry.item;
+    }
+    return items[items.length - 1]?.item;
   }
 
   private buildVisitCountMap(days: number): Map<number, number> {
@@ -110,7 +203,6 @@ export class RecommendationServiceImpl implements RecommendationService {
 
   private parsePreference(query: string): QueryPreference {
     const q = query.toLowerCase();
-    const has = query.length > 0;
 
     const categories = new Set<RestaurantCategory>();
     if (/한식/.test(q)) categories.add('한식');
@@ -121,7 +213,7 @@ export class RecommendationServiceImpl implements RecommendationService {
     if (/기타|베트남|태국|쌀국수/.test(q)) categories.add('기타');
 
     return {
-      hasQuery: has,
+      hasQuery: query.length > 0,
       near: /가깝|근처|도보|빨리|가까운/.test(q),
       far: /멀|먼|드라이브|가볼/.test(q),
       spicy: /매운|얼큰|맵/.test(q),
@@ -135,131 +227,77 @@ export class RecommendationServiceImpl implements RecommendationService {
     };
   }
 
-  private scoreRestaurant(params: {
-    restaurant: Restaurant;
-    weather: WeatherInfo;
-    preference: QueryPreference;
-    recent3: Set<string>;
-    visits90: Map<number, number>;
-    previousSet: Set<string>;
-    budget: number;
-  }): number {
-    const { restaurant, weather, preference, recent3, visits90, previousSet, budget } = params;
-    const tags = (restaurant.tags ?? '').toLowerCase();
-    const rating = this.reviewRepo.getAverageRating(restaurant.id);
-    const visits = visits90.get(restaurant.id) ?? 0;
-    const distance = restaurant.distance ?? 0;
-
-    let score = 0;
-
-    // Random baseline so refresh without input changes naturally.
-    score += Math.random() * 1.2;
-
-    // Weather + distance
-    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
-    if (isRainy) score += Math.max(0, 2.8 - distance / 120);
-    if (weather.temp < 10) score += this.hasAny(tags, ['국물', '탕', '찌개', '라멘', '국밥']) ? 1.7 : 0;
-    if (weather.temp > 25) score += this.hasAny(tags, ['냉', '면', '쌀국수', '시원']) ? 1.5 : 0;
-
-    // Quality / history
-    score += rating * 0.65;
-    score -= visits * 0.3;
-    if (recent3.has(restaurant.name)) score -= 1.8;
-    if (previousSet.has(restaurant.name)) score -= 1.1;
-    if (restaurant.price > budget) score -= 0.8;
-
-    // Distance preference
-    if (preference.near) score += Math.max(0, 2.4 - distance / 130);
-    if (preference.far) score += Math.min(2.2, distance / 220);
-
-    // Category preference
-    if (preference.categories.size > 0 && preference.categories.has(restaurant.category)) {
-      score += 3.0;
-    }
-
-    // Query semantic preference from tags
-    if (preference.spicy && this.hasAny(tags, ['매운', '마라', '얼큰'])) score += 1.8;
-    if (preference.soup && this.hasAny(tags, ['국물', '탕', '찌개', '국밥'])) score += 1.8;
-    if (preference.noodle && this.hasAny(tags, ['면', '라멘', '국수', '냉면', '쌀국수'])) score += 1.6;
-    if (preference.rice && this.hasAny(tags, ['밥', '덮밥', '비빔밥', '볶음밥', '국밥'])) score += 1.4;
-    if (preference.meat && this.hasAny(tags, ['고기', '갈비', '불고기', '삼겹', '돈까스'])) score += 1.4;
-    if (preference.coolFood && this.hasAny(tags, ['냉', '시원', '냉면'])) score += 1.4;
-    if (preference.warmFood && this.hasAny(tags, ['국물', '탕', '찌개', '해장'])) score += 1.4;
-
-    return score;
-  }
-
-  private pickTopFive(ranked: RankedCandidate[], preference: QueryPreference): RankedCandidate[] {
-    const selected: RankedCandidate[] = [];
-    const usedNames = new Set<string>();
-    const usedCategories = new Set<string>();
-    const preferCategoryDiversity = !preference.hasQuery || preference.categories.size === 0;
-
-    // 1st pass: diversity-first
-    if (preferCategoryDiversity) {
-      for (const item of ranked) {
-        if (selected.length >= 5) break;
-        if (usedNames.has(item.restaurant.name)) continue;
-        if (usedCategories.has(item.restaurant.category)) continue;
-        selected.push(item);
-        usedNames.add(item.restaurant.name);
-        usedCategories.add(item.restaurant.category);
-      }
-    }
-
-    // 2nd pass: fill remaining by score order
-    for (const item of ranked) {
-      if (selected.length >= 5) break;
-      if (usedNames.has(item.restaurant.name)) continue;
-      selected.push(item);
-      usedNames.add(item.restaurant.name);
-    }
-
-    return selected.slice(0, 5);
-  }
-
-  private rotateIfSameFirst(items: RankedCandidate[], previousNames: string[]): RankedCandidate[] {
-    if (items.length < 2 || previousNames.length === 0) return items;
-    if (items[0].restaurant.name !== previousNames[0]) return items;
-
-    const nextIndex = items.findIndex((item, idx) => idx > 0 && item.restaurant.name !== items[0].restaurant.name);
-    if (nextIndex > 0) {
-      const swapped = [...items];
-      [swapped[0], swapped[nextIndex]] = [swapped[nextIndex], swapped[0]];
-      return swapped;
-    }
-    return items;
-  }
-
-  private buildReason(
+  private buildDisplayLabel(
     restaurant: Restaurant,
+    tags: string[],
     weather: WeatherInfo,
     preference: QueryPreference,
     recent3: Set<string>,
-    visits90: Map<number, number>
+    visitCount: number
   ): string {
-    const tags = (restaurant.tags ?? '').toLowerCase();
-    const distance = restaurant.distance ?? 0;
-    const visits = visits90.get(restaurant.id) ?? 0;
-    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
+    const menuHint = this.pickMenuHint(tags, preference, weather);
+    if (menuHint) return menuHint;
 
-    if (preference.categories.has(restaurant.category)) return '요청 조건 반영';
+    const distance = restaurant.distance ?? 0;
+    const rainy = weather.condition === 'rain' || weather.condition === 'snow';
+
+    if (preference.categories.has(restaurant.category)) return '요청 반영';
     if (preference.near && distance <= 150) return '가까운 곳';
-    if (preference.far && distance >= 200) return '조금 먼 곳';
-    if (preference.spicy && this.hasAny(tags, ['매운', '마라', '얼큰'])) return '매운 메뉴';
-    if (preference.soup && this.hasAny(tags, ['국물', '탕', '찌개', '국밥'])) return '국물 메뉴';
-    if (preference.noodle && this.hasAny(tags, ['면', '라멘', '국수', '냉면'])) return '면 요리';
-    if (preference.rice && this.hasAny(tags, ['밥', '덮밥', '비빔밥', '볶음밥'])) return '밥 메뉴';
-    if (preference.meat && this.hasAny(tags, ['고기', '갈비', '불고기', '삼겹'])) return '고기 메뉴';
-    if (isRainy && distance <= 120) return '비/눈 대비';
-    if (weather.temp > 25 && this.hasAny(tags, ['냉', '시원', '면'])) return '더운 날씨';
-    if (weather.temp < 10 && this.hasAny(tags, ['국물', '탕', '찌개'])) return '추운 날씨';
-    if (recent3.has(restaurant.name)) return '최근 방문';
-    if (visits <= 1) return '최근 덜 간 곳';
+    if (preference.far && distance >= 200) return '멀리 가볼 만한 곳';
+    if (rainy && distance <= 120) return '비 오는 날 가까운 곳';
+    if (weather.temp <= 10) return '따뜻하게 먹기 좋은 곳';
+    if (weather.temp >= 25) return '가볍게 먹기 좋은 곳';
+    if (recent3.has(restaurant.name)) return '오랜만에 다시 추천';
+    if (visitCount <= 1) return '최근 덜 간 곳';
     return '오늘 추천';
   }
 
-  private hasAny(tags: string, needles: string[]): boolean {
-    return needles.some(n => tags.includes(n));
+  private pickMenuHint(tags: string[], preference: QueryPreference, weather: WeatherInfo): string | undefined {
+    const explicitMenu =
+      (preference.noodle && this.findFirstTag(tags, ['냉면', '라멘', '우동', '국수', '쌀국수', '면'])) ||
+      (preference.rice && this.findFirstTag(tags, ['덮밥', '비빔밥', '볶음밥', '국밥', '밥'])) ||
+      (preference.soup && this.findFirstTag(tags, ['탕', '찌개', '국밥', '국물'])) ||
+      (preference.spicy && this.findFirstTag(tags, ['마라', '얼큰', '매운'])) ||
+      (preference.meat && this.findFirstTag(tags, ['갈비', '불고기', '삼겹', '돈까스', '고기'])) ||
+      (preference.coolFood && this.findFirstTag(tags, ['냉면', '쌀국수', '냉', '시원'])) ||
+      (preference.warmFood && this.findFirstTag(tags, ['국밥', '탕', '찌개', '해장', '국물']));
+
+    if (explicitMenu) return explicitMenu;
+
+    if (weather.temp <= 10) {
+      const warmTag = this.findFirstTag(tags, ['국밥', '탕', '찌개', '라멘', '우동', '국물']);
+      if (warmTag) return warmTag;
+    }
+
+    if (weather.temp >= 25) {
+      const coolTag = this.findFirstTag(tags, ['냉면', '쌀국수', '시원', '냉']);
+      if (coolTag) return coolTag;
+    }
+
+    return this.findFirstTag(tags, [
+      '냉면', '라멘', '우동', '국수', '쌀국수',
+      '덮밥', '비빔밥', '볶음밥', '국밥', '찌개',
+      '탕', '마라', '돈까스', '초밥', '피자', '파스타',
+      '김밥', '떡볶이', '불고기', '갈비', '삼겹'
+    ]);
+  }
+
+  private parseTags(rawTags?: string): string[] {
+    return (rawTags ?? '')
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(Boolean);
+  }
+
+  private matchesAnyTag(tags: string[], needles: string[]): boolean {
+    return needles.some(needle => tags.some(tag => tag.includes(needle)));
+  }
+
+  private findFirstTag(tags: string[], needles: string[]): string | undefined {
+    for (const needle of needles) {
+      const match = tags.find(tag => tag.includes(needle));
+      if (match) return match;
+    }
+    return undefined;
   }
 }

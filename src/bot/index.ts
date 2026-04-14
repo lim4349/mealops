@@ -156,30 +156,12 @@ export class MeaLOpsBot extends ActivityHandler {
 
         case 'recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
-          const cacheKey = this.getRecommendCacheKey(today, userRequest);
-          const recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
-          if (recommendations.length > 0) {
-            this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
-          }
-          if (recommendations.length === 0) {
-            return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
-          }
-          return this.cardResponse(buildRecommendCard(recommendations, userRequest));
+          return this.handleRecommendAction(userId, today, userRequest, false);
         }
 
         case 'refresh_recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
-          const cacheKey = this.getRecommendCacheKey(today, userRequest);
-          const previousNames = (this.recommendCache.get(cacheKey)?.data ?? []).map(r => r.name);
-          this.recommendCache.delete(cacheKey);
-          const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
-          if (recommendations.length > 0) {
-            this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
-          }
-          if (recommendations.length === 0) {
-            return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
-          }
-          return this.cardResponse(buildRecommendCard(recommendations, userRequest));
+          return this.handleRecommendAction(userId, today, userRequest, true);
         }
 
         case 'show_list': {
@@ -516,6 +498,30 @@ export class MeaLOpsBot extends ActivityHandler {
       votersByRestaurant, soloVoters, anyVoters,
       anyCount, uniqueVoterCount, deliveryModeActive, globalBlacklistedIds
     );
+  }
+
+  private async handleRecommendAction(
+    userId: string,
+    today: string,
+    userRequest: string | undefined,
+    refresh: boolean
+  ): Promise<AdaptiveCardInvokeResponse> {
+    const cacheKey = this.getRecommendCacheKey(today, userRequest);
+    const previousNames = refresh
+      ? (this.recommendCache.get(cacheKey)?.data ?? []).map(r => r.name)
+      : [];
+
+    if (refresh) {
+      this.recommendCache.delete(cacheKey);
+    }
+
+    const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
+    if (recommendations.length === 0) {
+      return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
+    }
+
+    this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
+    return this.cardResponse(buildRecommendCard(recommendations, userRequest));
   }
 
   private getRecommendCacheKey(today: string, userRequest?: string): string {
