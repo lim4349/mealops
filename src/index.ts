@@ -71,12 +71,10 @@ const favoriteService = new FavoriteServiceImpl(
   restaurantRepo
 );
 
-// CloudAdapter with SingleTenant authentication (한국 리전 Single-Tenant 봇)
+// CloudAdapter authentication
 const auth = new ConfigurationBotFrameworkAuthentication({
   MicrosoftAppId: process.env.MICROSOFT_APP_ID ?? '',
   MicrosoftAppPassword: process.env.MICROSOFT_APP_PASSWORD ?? '',
-  MicrosoftAppType: 'SingleTenant',
-  MicrosoftAppTenantId: process.env.MICROSOFT_APP_TENANT_ID ?? '',
 });
 
 const adapter = new CloudAdapter(auth);
