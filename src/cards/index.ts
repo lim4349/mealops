@@ -279,26 +279,9 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
     return `${left} / ${field} / ${distance ?? 0}m`;
   };
 
-  const summaryLabel = userRequest ? `"${userRequest}" 조건 반영` : '기본 추천 모드';
-
   const body: any[] = [
     buildTopMenuActionSet(),
     { type: 'TextBlock', text: '🤖 AI 추천 메뉴', weight: 'bolder', size: 'large' },
-    {
-      type: 'TextBlock',
-      text: '추천 탭 v2',
-      color: 'accent',
-      weight: 'bolder',
-      size: 'small',
-      spacing: 'none',
-    },
-    {
-      type: 'TextBlock',
-      text: `현재 기준: ${summaryLabel}`,
-      wrap: true,
-      spacing: 'none',
-      size: 'small',
-    },
     {
       type: 'TextBlock',
       text: '입력이 없으면 날씨, 거리, 방문 빈도를 보고 추천합니다. 입력이 있으면 그 조건을 우선 반영합니다.',
@@ -327,15 +310,8 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
       actions: [
         {
           type: 'Action.Execute',
-          verb: 'recommend',
-          title: '✨ 조건으로 추천',
-          associatedInputs: 'auto',
-          data: {},
-        },
-        {
-          type: 'Action.Execute',
           verb: 'refresh_recommend',
-          title: '🔄 다시 추천',
+          title: '🔄 추천',
           associatedInputs: 'auto',
           data: {},
         },
@@ -349,34 +325,45 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
       spacing: 'small',
     }] : []),
     ...recommendations.map((r, i) => ({
-      type: 'Container',
-      style: 'emphasis',
+      type: 'ColumnSet',
       separator: i > 0,
       spacing: 'medium',
-      items: [
+      columns: [
         {
-          type: 'TextBlock',
-          text: `${i + 1}. ${r.name}`,
-          weight: 'bolder',
-          wrap: true,
-        },
-        {
-          type: 'TextBlock',
-          text: formatLine(r.reason, r.category, r.distance),
-          wrap: true,
-          spacing: 'small',
-          size: 'small',
-          isSubtle: true,
-        },
-        {
-          type: 'ActionSet',
-          spacing: 'small',
-          actions: [
+          type: 'Column',
+          width: 'stretch',
+          items: [
             {
-              type: 'Action.Execute',
-              verb: 'vote',
-              title: '▶ 바로 투표',
-              data: { restaurantName: r.name },
+              type: 'TextBlock',
+              text: `${i + 1}. ${r.name}`,
+              weight: 'bolder',
+              wrap: true,
+            },
+            {
+              type: 'TextBlock',
+              text: formatLine(r.reason, r.category, r.distance),
+              wrap: true,
+              spacing: 'small',
+              size: 'small',
+              isSubtle: true,
+            },
+          ],
+        },
+        {
+          type: 'Column',
+          width: 'auto',
+          verticalContentAlignment: 'center',
+          items: [
+            {
+              type: 'ActionSet',
+              actions: [
+                {
+                  type: 'Action.Execute',
+                  verb: 'vote',
+                  title: '▶ 투표',
+                  data: { restaurantName: r.name },
+                },
+              ],
             },
           ],
         },
