@@ -29,6 +29,7 @@ import {
   buildAddRestaurantCard,
   type SortKey,
 } from '../cards/index.js';
+import { formatKstDate } from '../utils/date.js';
 
 export const conversationReferences = new Map<string, any>();
 
@@ -36,7 +37,7 @@ export class MeaLOpsBot extends ActivityHandler {
   private commandHandler: CommandHandler;
   private deps: Dependencies;
 
-  // AI 추천 캐시 (키: YYYY-MM-DD, 오늘 날짜 기준)
+  // AI 추천 캐시 (키: YYYY-MM-DD|userRequest)
   private recommendCache = new Map<string, { data: RecommendationResult[]; timestamp: number }>();
   private readonly RECOMMEND_CACHE_TTL = 60 * 60 * 1000; // 1시간
 
@@ -116,11 +117,11 @@ export class MeaLOpsBot extends ActivityHandler {
     const { verb, data } = invokeValue.action;
     const userId = context.activity.from?.id ?? 'unknown';
     const userName = context.activity.from?.name ?? '익명';
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatKstDate();
 
     // 오늘 날짜가 아닌 오래된 캐시 정리
     for (const [key] of this.recommendCache) {
-      if (key !== today) this.recommendCache.delete(key);
+      if (!key.startsWith(`${today}|`)) this.recommendCache.delete(key);
     }
 
     try {
@@ -155,15 +156,15 @@ export class MeaLOpsBot extends ActivityHandler {
 
         case 'recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
-          const cached = this.recommendCache.get(today);
+          const cacheKey = this.getRecommendCacheKey(today, userRequest);
+          const cached = this.recommendCache.get(cacheKey);
           let recommendations: RecommendationResult[];
-          // userRequest가 있으면 캐시 무시하고 새로 추천
-          if (!userRequest && cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
+          if (cached && Date.now() - cached.timestamp < this.RECOMMEND_CACHE_TTL) {
             recommendations = cached.data;
           } else {
             recommendations = await this.deps.recommendationService.getRecommendations(userId, [], userRequest);
-            if (recommendations.length > 0 && !userRequest) {
-              this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
+            if (recommendations.length > 0) {
+              this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
             }
           }
           if (recommendations.length === 0) {
@@ -174,11 +175,12 @@ export class MeaLOpsBot extends ActivityHandler {
 
         case 'refresh_recommend': {
           const userRequest = data.userRequest ? String(data.userRequest).trim().slice(0, 30) : undefined;
-          const previousNames = (this.recommendCache.get(today)?.data ?? []).map(r => r.name);
-          this.recommendCache.delete(today);
+          const cacheKey = this.getRecommendCacheKey(today, userRequest);
+          const previousNames = (this.recommendCache.get(cacheKey)?.data ?? []).map(r => r.name);
+          this.recommendCache.delete(cacheKey);
           const recommendations = await this.deps.recommendationService.getRecommendations(userId, previousNames, userRequest);
-          if (recommendations.length > 0 && !userRequest) {
-            this.recommendCache.set(today, { data: recommendations, timestamp: Date.now() });
+          if (recommendations.length > 0) {
+            this.recommendCache.set(cacheKey, { data: recommendations, timestamp: Date.now() });
           }
           if (recommendations.length === 0) {
             return this.cardResponse(buildResponseCard('추천할 식당이 없습니다.', true));
@@ -365,7 +367,9 @@ export class MeaLOpsBot extends ActivityHandler {
                 this.deps.historyRepo.add(restaurant.id, today, winnerVotes);
               }
             }
-            return this.cardResponse(buildResponseCard(`🍽️ ${result.message}\n\n13:30에 리뷰 알림이 발송됩니다.`, true));
+            const reviewHour = process.env.REVIEW_HOUR ?? '12';
+            const reviewMinute = process.env.REVIEW_MINUTE ?? '50';
+            return this.cardResponse(buildResponseCard(`🍽️ ${result.message}\n\n${reviewHour}:${reviewMinute}에 리뷰 알림이 발송됩니다.`, true));
           }
           return this.cardResponse(buildResponseCard(result.message, true));
         }
@@ -486,7 +490,7 @@ export class MeaLOpsBot extends ActivityHandler {
   }
 
   private buildVoteCardForToday(userId: string): any {
-    const today = new Date().toISOString().split('T')[0];
+    const today = formatKstDate();
 
     const deliveryModeActive = this.deps.settingRepo.getDeliveryModeActive();
     let restaurants = this.deps.restaurantRepo.findAll();
@@ -518,6 +522,10 @@ export class MeaLOpsBot extends ActivityHandler {
       votersByRestaurant, soloVoters, anyVoters,
       anyCount, uniqueVoterCount, deliveryModeActive, globalBlacklistedIds
     );
+  }
+
+  private getRecommendCacheKey(today: string, userRequest?: string): string {
+    return `${today}|${(userRequest ?? '').trim().toLowerCase()}`;
   }
 
   private buildFavoritesMessage(stats: any): string {

@@ -1,6 +1,7 @@
 import { CardFactory } from 'botbuilder';
 import type { Attachment } from 'botbuilder';
 import type { Restaurant, RecommendationResult, VoteResult, SelectedHistory, RestaurantRepository, VoterEntry, WeatherInfo } from '../core/types.js';
+import { addDaysToYmd, formatKstDate, getWeekdayFromYmd, parseYmdAsUtc } from '../utils/date.js';
 
 // Top menu ActionSet - 모든 카드 상단에 공통으로 추가
 function buildTopMenuActionSet(): any {
@@ -815,7 +816,9 @@ export function buildDashboardCard(
   reviewMap: Map<string, number> = new Map(),
   allTimeHistory: SelectedHistory[] = []
 ): Attachment {
-  const today = new Date();
+  const todayStr = formatKstDate();
+  const today = parseYmdAsUtc(todayStr);
+  const [year, month] = todayStr.split('-').map(Number);
   const DAY_LABELS = ['월', '화', '수', '목', '금'];
   const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -870,16 +873,14 @@ export function buildDashboardCard(
     let title: string;
 
     if (view === 'week') {
-      const dow = today.getDay();
-      const monday = new Date(today);
-      monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
-      const mondayStr = monday.toISOString().split('T')[0];
+      const dow = getWeekdayFromYmd(todayStr);
+      const mondayStr = addDaysToYmd(todayStr, -(dow === 0 ? 6 : dow - 1));
       filtered = history.filter(h => h.selected_date >= mondayStr);
       title = '📊 이번 주 점심';
     } else {
-      const monthPrefix = today.toISOString().slice(0, 7);
+      const monthPrefix = todayStr.slice(0, 7);
       filtered = history.filter(h => h.selected_date.startsWith(monthPrefix));
-      title = `📊 ${today.getMonth() + 1}월 점심`;
+      title = `📊 ${month}월 점심`;
     }
 
     const historyByDate = new Map<string, SelectedHistory>();
@@ -905,38 +906,30 @@ export function buildDashboardCard(
     // 주차 생성
     const weeks: string[][] = [];
     if (view === 'week') {
-      const dow = today.getDay();
-      const monday = new Date(today);
-      monday.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1));
+      const dow = getWeekdayFromYmd(todayStr);
+      const mondayStr = addDaysToYmd(todayStr, -(dow === 0 ? 6 : dow - 1));
       const week: string[] = [];
       for (let i = 0; i < 5; i++) {
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + i);
-        week.push(d.toISOString().split('T')[0]);
+        week.push(addDaysToYmd(mondayStr, i));
       }
       weeks.push(week);
     } else {
-      const year = today.getFullYear();
-      const month = today.getMonth();
-      const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0);
-      const firstDow = firstDay.getDay();
-      const firstMonday = new Date(firstDay);
-      firstMonday.setDate(firstDay.getDate() - (firstDow === 0 ? 6 : firstDow - 1));
-      const cur = new Date(firstMonday);
-      while (cur <= lastDay) {
+      const firstDayStr = `${todayStr.slice(0, 7)}-01`;
+      const firstDow = getWeekdayFromYmd(firstDayStr);
+      const firstMondayStr = addDaysToYmd(firstDayStr, -(firstDow === 0 ? 6 : firstDow - 1));
+      const lastDay = new Date(Date.UTC(year, month, 0));
+      const lastDayStr = lastDay.toISOString().slice(0, 10);
+      let curStr = firstMondayStr;
+      while (curStr <= lastDayStr) {
         const week: string[] = [];
         for (let i = 0; i < 5; i++) {
-          const d = new Date(cur);
-          d.setDate(cur.getDate() + i);
-          week.push(d.getMonth() === month ? d.toISOString().split('T')[0] : '');
+          const dayStr = addDaysToYmd(curStr, i);
+          week.push(dayStr.startsWith(todayStr.slice(0, 7)) ? dayStr : '');
         }
         weeks.push(week);
-        cur.setDate(cur.getDate() + 7);
+        curStr = addDaysToYmd(curStr, 7);
       }
     }
-
-    const todayStr = today.toISOString().split('T')[0];
 
     // 달력 셀 렌더링
     weeks.forEach((week, weekIdx) => {
@@ -990,7 +983,7 @@ export function buildDashboardCard(
       for (const h of unreviewed) {
         const restaurant = restaurantRepo.findById(h.restaurant_id);
         if (!restaurant) continue;
-        const d = new Date(h.selected_date + 'T00:00:00');
+        const d = parseYmdAsUtc(h.selected_date);
         const dateLabel = `${h.selected_date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
         body.push({
           type: 'ColumnSet',
@@ -1026,7 +1019,7 @@ export function buildDashboardCard(
 }
 
 export function buildAddHistoryCard(date: string, restaurants: Restaurant[]): Attachment {
-  const d = new Date(date + 'T00:00:00');
+  const d = parseYmdAsUtc(date);
   const DAY_NAMES = ['일', '월', '화', '수', '목', '금', '토'];
   const dateLabel = `${date.slice(5)} (${DAY_NAMES[d.getDay()]})`;
 

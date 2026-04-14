@@ -407,9 +407,9 @@ export class SelectedHistoryRepositoryImpl implements SelectedHistoryRepository 
   findRecent(days: number): SelectedHistory[] {
     return this.db.all<SelectedHistory>(`
       SELECT sh.* FROM selected_history sh
-      WHERE sh.selected_date >= date('now', '-${days} days')
+      WHERE sh.selected_date >= date('now', '+9 hours', ?)
       ORDER BY sh.selected_date DESC
-    `);
+    `, [`-${days} days`]);
   }
 
   findByDate(date: string): SelectedHistory | undefined {
@@ -422,9 +422,9 @@ export class SelectedHistoryRepositoryImpl implements SelectedHistoryRepository 
   getRecentVisitDates(restaurantId: number, days: number): string[] {
     const results = this.db.all<{ selected_date: string }>(`
       SELECT selected_date FROM selected_history
-      WHERE restaurant_id = ? AND selected_date >= date('now', '-${days} days')
+      WHERE restaurant_id = ? AND selected_date >= date('now', '+9 hours', ?)
       ORDER BY selected_date DESC
-    `, [restaurantId]);
+    `, [restaurantId, `-${days} days`]);
     return results.map(r => r.selected_date);
   }
 

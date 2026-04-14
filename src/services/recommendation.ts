@@ -23,6 +23,7 @@ export class RecommendationServiceImpl implements RecommendationService {
   async getRecommendations(userId: string, previousNames: string[] = [], userRequest?: string): Promise<import('../core/types.js').RecommendationResult[]> {
     // Get current weather
     const weather = await this.weatherService.getCurrent();
+    const previousNameSet = new Set(previousNames);
 
     // Get all active restaurants
     let allRestaurants = this.restaurantRepo.findAll();
@@ -68,7 +69,8 @@ export class RecommendationServiceImpl implements RecommendationService {
     const availableRestaurants = allRestaurants.filter(r =>
       !blacklistedNames.includes(r.name) &&
       !recentVisits.includes(r.name) &&
-      !lowRatedIds.has(r.id)
+      !lowRatedIds.has(r.id) &&
+      !previousNameSet.has(r.name)
     );
     const availableNames = new Set(availableRestaurants.map(r => r.name));
 
@@ -112,74 +114,55 @@ export class RecommendationServiceImpl implements RecommendationService {
       // If no valid recommendations, return fallback
       if (validRecommendations.length === 0) {
         console.log('[Recommend] → fallback 사용');
-        return this.getFallbackRecommendations(weather, allRestaurants, blacklistedNames, recentVisits);
+        return this.getFallbackRecommendations(weather, availableRestaurants);
       }
 
       // 후처리: 한국어 체크 + 카테고리/거리 보정 + 5개 보충
-      return this.postProcess(validRecommendations, availableRestaurants, weather, blacklistedNames, recentVisits);
+      return this.postProcess(validRecommendations, availableRestaurants, weather);
     } catch (error) {
       console.error('Recommendation error:', error);
-      return this.getFallbackRecommendations(weather, allRestaurants, blacklistedNames, recentVisits);
+      return this.getFallbackRecommendations(weather, availableRestaurants);
     }
   }
 
   private postProcess(
     recs: import('../core/types.js').RecommendationResult[],
     available: import('../core/types.js').Restaurant[],
-    weather: import('../core/types.js').WeatherInfo,
-    blacklisted: string[],
-    recentVisits: string[]
+    weather: import('../core/types.js').WeatherInfo
   ): import('../core/types.js').RecommendationResult[] {
     const restaurantMap = new Map(available.map(r => [r.name, r]));
     const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
+    const uniqueByName = new Set<string>();
 
-    // 1. LLM reason에서 핵심 키워드만 추출 + 카테고리·거리 항상 강제 append
-    const processed = recs.map(rec => {
+    // 1. LLM reason 정리 + 이름 중복 제거
+    const normalized = recs.flatMap(rec => {
       const r = restaurantMap.get(rec.name);
-      if (!r) return rec;
+      if (!r || uniqueByName.has(rec.name)) return [];
+      uniqueByName.add(rec.name);
 
       const hasKorean = /[가-힣]/.test(rec.reason);
-      // LLM reason에서 · 이전 부분만 사용 (LLM이 붙인 카테고리/거리 제거)
       const rawReason = hasKorean ? rec.reason.split('·')[0].trim() : this.buildWeatherKeyword(weather);
+      const keyword = rawReason || this.buildWeatherKeyword(weather);
       // 항상 DB의 카테고리·거리 append
-      const reason = `${rawReason} · ${r.category} · ${r.distance}m`;
+      const reason = `${keyword} · ${r.category} · ${r.distance}m`;
 
-      return { ...rec, reason };
+      return [{
+        ...rec,
+        reason,
+        category: r.category,
+        distance: r.distance,
+        price: r.price,
+      }];
     });
 
-    // 2. 5개 미만이면 나머지 채우기
-    if (processed.length < 5) {
-      const usedNames = new Set(processed.map(r => r.name));
-      const remaining = available
-        .filter(r => !usedNames.has(r.name) && !blacklisted.includes(r.name) && !recentVisits.includes(r.name));
-
-      const sorted = isRainy
-        ? remaining.sort((a, b) => a.distance - b.distance)
-        : remaining.sort(() => Math.random() - 0.5);
-
-      for (const r of sorted) {
-        if (processed.length >= 5) break;
-        processed.push({
-          name: r.name,
-          reason: this.buildFallbackReason(weather, r, r.category),
-        });
-      }
-    }
-
-    return processed.slice(0, 5);
+    return this.expandToFive(normalized, available, weather, isRainy);
   }
 
   private getFallbackRecommendations(
     weather: import('../core/types.js').WeatherInfo,
-    restaurants: import('../core/types.js').Restaurant[],
-    blacklisted: string[],
-    recentVisits: string[]
+    restaurants: import('../core/types.js').Restaurant[]
   ): import('../core/types.js').RecommendationResult[] {
-    const available = restaurants.filter(r =>
-      !blacklisted.includes(r.name) && !recentVisits.includes(r.name)
-    );
-
-    if (available.length === 0) return [];
+    if (restaurants.length === 0) return [];
 
     // Build category preference based on weather
     const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
@@ -195,44 +178,88 @@ export class RecommendationServiceImpl implements RecommendationService {
     }
 
     // 비/눈 오는 날은 가까운 순, 그 외에는 랜덤
-    const shuffled = isRainy
-      ? [...available].sort((a, b) => a.distance - b.distance)
-      : [...available].sort(() => Math.random() - 0.5);
+    const ordered = isRainy
+      ? [...restaurants].sort((a, b) => a.distance - b.distance)
+      : [...restaurants].sort(() => Math.random() - 0.5);
 
-    // Group by category and pick one from each preferred category
-    const selectedByCategory = new Map<string, import('../core/types.js').Restaurant>();
-    const results: import('../core/types.js').RecommendationResult[] = [];
+    const preferred = categoryPreferences.flatMap(category => {
+      const picked = ordered.find(r => r.category === category);
+      if (!picked) return [];
+      return [{
+        name: picked.name,
+        reason: this.buildFallbackReason(weather, picked, category),
+        category: picked.category,
+        distance: picked.distance,
+        price: picked.price,
+      }];
+    });
 
-    // 1. First, pick one from each preferred category
-    for (const category of categoryPreferences) {
-      const candidates = shuffled.filter(
-        r => r.category === category && !selectedByCategory.has(r.name)
-      );
-      if (candidates.length > 0) {
-        const picked = candidates[0];
-        selectedByCategory.set(picked.name, picked);
-        results.push({
-          name: picked.name,
-          reason: this.buildFallbackReason(weather, picked, category),
-          category: picked.category,
-          distance: picked.distance,
-        });
+    return this.expandToFive(preferred, ordered, weather, isRainy);
+  }
+
+  private expandToFive(
+    seeds: import('../core/types.js').RecommendationResult[],
+    available: import('../core/types.js').Restaurant[],
+    weather: import('../core/types.js').WeatherInfo,
+    isRainy: boolean
+  ): import('../core/types.js').RecommendationResult[] {
+    const restaurantMap = new Map(available.map(r => [r.name, r]));
+    const selected: import('../core/types.js').RecommendationResult[] = [];
+    const usedNames = new Set<string>();
+    const usedCategories = new Set<string>();
+    const overflow: import('../core/types.js').RecommendationResult[] = [];
+
+    for (const rec of seeds) {
+      const restaurant = restaurantMap.get(rec.name);
+      if (!restaurant || usedNames.has(rec.name)) continue;
+
+      const normalized = {
+        ...rec,
+        category: restaurant.category,
+        distance: restaurant.distance,
+        price: restaurant.price,
+        reason: rec.reason || this.buildFallbackReason(weather, restaurant, restaurant.category),
+      };
+
+      if (!usedCategories.has(restaurant.category)) {
+        selected.push(normalized);
+        usedNames.add(rec.name);
+        usedCategories.add(restaurant.category);
+      } else {
+        overflow.push(normalized);
       }
     }
 
-    // 2. Fill remaining slots with random other categories
-    const remaining = shuffled.filter(r => !selectedByCategory.has(r.name));
-    for (const r of remaining) {
-      if (results.length >= 5) break;
-      results.push({
-        name: r.name,
-        reason: this.buildFallbackReason(weather, r, 'other'),
-        category: r.category,
-        distance: r.distance,
-      });
+    for (const rec of overflow) {
+      if (selected.length >= 5) break;
+      if (usedNames.has(rec.name)) continue;
+      selected.push(rec);
+      usedNames.add(rec.name);
     }
 
-    return results.slice(0, 5);
+    const remaining = isRainy
+      ? [...available].sort((a, b) => a.distance - b.distance)
+      : [...available].sort(() => Math.random() - 0.5);
+
+    for (const preferUnusedCategory of [true, false]) {
+      for (const restaurant of remaining) {
+        if (selected.length >= 5) break;
+        if (usedNames.has(restaurant.name)) continue;
+        if (preferUnusedCategory && usedCategories.has(restaurant.category)) continue;
+
+        selected.push({
+          name: restaurant.name,
+          reason: this.buildFallbackReason(weather, restaurant, restaurant.category),
+          category: restaurant.category,
+          distance: restaurant.distance,
+          price: restaurant.price,
+        });
+        usedNames.add(restaurant.name);
+        usedCategories.add(restaurant.category);
+      }
+    }
+
+    return selected.slice(0, 5);
   }
 
   private buildWeatherKeyword(weather: import('../core/types.js').WeatherInfo): string {

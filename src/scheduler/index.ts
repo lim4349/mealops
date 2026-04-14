@@ -12,6 +12,7 @@ import type {
   WeatherService,
 } from '../core/types.js';
 import { buildVoteCard, buildReviewCard } from '../cards/index.js';
+import { formatKstDate, formatKstTime, getKstWeekday } from '../utils/date.js';
 
 // Define ScheduledTask type locally
 interface ScheduledTask {
@@ -23,6 +24,7 @@ export class SchedulerImpl implements Scheduler {
   private voteTask: ReturnType<typeof cron.schedule> | null = null;
   private decisionTask: ReturnType<typeof cron.schedule> | null = null;
   private reviewTask: ReturnType<typeof cron.schedule> | null = null;
+  private intervalHandle: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private voteService: VoteService,
@@ -36,50 +38,68 @@ export class SchedulerImpl implements Scheduler {
     private sendNotification: (message: string, card?: Attachment) => Promise<void>
   ) {}
 
-  private lastVoteTime = '';
-  private lastDecisionTime = '';
+  private lastVoteKey = '';
+  private lastDecisionKey = '';
+  private lastReviewKey = '';
 
   start(): void {
     const voteHour = process.env.VOTE_HOUR ?? '11';
     const voteMinute = process.env.VOTE_MINUTE ?? '00';
-    const forceMinute = parseInt(process.env.FORCE_DECISION_MINUTE ?? '30', 10);
+    const forceMinute = String(parseInt(process.env.FORCE_DECISION_MINUTE ?? '30', 10)).padStart(2, '0');
+    const reviewHour = process.env.REVIEW_HOUR ?? '12';
+    const reviewMinute = process.env.REVIEW_MINUTE ?? '50';
 
-    console.log(`⏰ Scheduler config: VOTE=${voteHour}:${voteMinute}, FORCE=${voteHour}:${forceMinute}`);
+    console.log(`⏰ Scheduler config: VOTE=${voteHour}:${voteMinute}, FORCE=${voteHour}:${forceMinute}, REVIEW=${reviewHour}:${reviewMinute}`);
 
-    // 매초 확인 (KST 기반, UTC+9)
+    if (this.intervalHandle) {
+      clearInterval(this.intervalHandle);
+    }
+
+    // 매초 확인 (KST 기준)
     let debugCount = 0;
-    setInterval(async () => {
+    this.intervalHandle = setInterval(async () => {
       const now = new Date();
-      // UTC에서 KST로 변환 (UTC + 9시간)
-      const kstTime = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-      const hour = String(kstTime.getHours()).padStart(2, '0');
-      const minute = String(kstTime.getMinutes()).padStart(2, '0');
-      const hm = `${hour}:${minute}`;
+      const today = formatKstDate(now);
+      const hm = formatKstTime(now);
+      const weekday = getKstWeekday(now);
 
       // 디버그: 10초마다 출력
       debugCount++;
       if (debugCount % 10 === 0) {
-        console.log(`[DEBUG] 현재: ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteTime}`);
+        console.log(`[DEBUG] 현재: ${today} ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteKey}`);
       }
 
-      // 투표 알림 (평일만, KST 기반)
-      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteTime !== hm && kstTime.getDay() >= 1 && kstTime.getDay() <= 5) {
-        this.lastVoteTime = hm;
+      const voteKey = `${today}|vote|${hm}`;
+      const decisionKey = `${today}|decision|${hm}`;
+      const reviewKey = `${today}|review|${hm}`;
+      const isWeekday = weekday >= 1 && weekday <= 5;
+      const isHoliday = this.isHoliday(now);
+
+      // 투표 알림 (평일만, KST 기준)
+      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteKey !== voteKey && isWeekday) {
+        this.lastVoteKey = voteKey;
         console.log(`[VOTE] 스케줄 실행: ${voteHour}:${voteMinute}`);
-        if (!this.isHoliday(kstTime)) {
+        if (!isHoliday) {
           await this.sendVoteReminder();
         }
       }
 
-      // 강제 결정 (평일만, KST 기반)
-      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionTime !== hm && kstTime.getDay() >= 1 && kstTime.getDay() <= 5) {
-        this.lastDecisionTime = hm;
+      // 강제 결정 (평일만, KST 기준)
+      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionKey !== decisionKey && isWeekday) {
+        this.lastDecisionKey = decisionKey;
         console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
-        if (!this.isHoliday(kstTime) && this.settingRepo.getForceDecisionEnabled()) {
+        if (!isHoliday && this.settingRepo.getForceDecisionEnabled()) {
           await this.makeForceDecision();
         }
       }
 
+      if (hm === `${reviewHour}:${reviewMinute}` && this.lastReviewKey !== reviewKey && isWeekday) {
+        this.lastReviewKey = reviewKey;
+        console.log(`[REVIEW] 스케줄 실행: ${reviewHour}:${reviewMinute}`);
+        if (!isHoliday) {
+          await this.sendReviewReminder();
+        }
+      }
     }, 1000); // 1초마다 확인
 
     console.log('Scheduler started (setInterval mode)');
@@ -89,6 +109,10 @@ export class SchedulerImpl implements Scheduler {
     this.voteTask?.stop();
     this.decisionTask?.stop();
     this.reviewTask?.stop();
+    if (this.intervalHandle) {
+      clearInterval(this.intervalHandle);
+      this.intervalHandle = null;
+    }
     console.log('Scheduler stopped');
   }
 
@@ -156,12 +180,14 @@ export class SchedulerImpl implements Scheduler {
       '2026-12-25', // 크리스마스
     ];
 
-    const dateStr = date.toISOString().split('T')[0];
+    const dateStr = formatKstDate(date);
     return holidays.includes(dateStr);
   }
 
   private async sendVoteReminder(): Promise<void> {
     const today = this.formatDate(new Date());
+    const voteHour = process.env.VOTE_HOUR ?? '11';
+    const forceMinute = String(parseInt(process.env.FORCE_DECISION_MINUTE ?? '30', 10)).padStart(2, '0');
 
     // Get delivery mode
     const deliveryModeActive = this.settingRepo.getDeliveryModeActive();
@@ -200,13 +226,19 @@ export class SchedulerImpl implements Scheduler {
 
     const message = `🍽️ **점심 투표 시간!**
 
-${this.settingRepo.getForceDecisionEnabled() ? `⏰ ${process.env.VOTE_HOUR}:${process.env.FORCE_DECISION_MINUTE || '30'}에 투표 마감됩니다!` : ''}`;
+${this.settingRepo.getForceDecisionEnabled() ? `⏰ ${voteHour}:${forceMinute}에 투표 마감됩니다!` : ''}`;
 
     await this.sendNotification(message, voteCard as any);
   }
 
   private async makeForceDecision(): Promise<void> {
     const today = this.formatDate(new Date());
+    const existingHistory = this.historyRepo.findByDate(today);
+    if (existingHistory) {
+      console.log(`[FORCE] ${today} 이미 메뉴가 결정되어 강제결정을 건너뜁니다.`);
+      return;
+    }
+
     const result = this.voteService.decideWinner(today);
 
     if (result.success && result.data) {
@@ -252,6 +284,6 @@ ${result.message}
   }
 
   private formatDate(date: Date): string {
-    return date.toISOString().split('T')[0];
+    return formatKstDate(date);
   }
 }
