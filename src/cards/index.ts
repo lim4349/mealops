@@ -274,6 +274,14 @@ export function buildVoteCard(
 
 // Recommendation card - 제목 우측 새로고침 인라인 + 투표 버튼
 export function buildRecommendCard(recommendations: RecommendationResult[], userRequest?: string): Attachment {
+  const formatRecommendationReason = (reason?: string, category?: string): string => {
+    const trimmedReason = (reason ?? '').trim();
+    const trimmedCategory = (category ?? '').trim();
+    if (!trimmedReason) return '오늘 추천';
+    if (trimmedCategory && trimmedReason === trimmedCategory) return '오늘 추천';
+    return trimmedReason;
+  };
+
   const body: any[] = [
     buildTopMenuActionSet(),
     // 제목
@@ -332,7 +340,7 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
             },
             {
               type: 'TextBlock',
-              text: `${r.reason} / ${r.category ?? ''} / ${r.distance ?? 0}m`,
+              text: `${formatRecommendationReason(r.reason, r.category)} / ${r.category ?? ''} / ${r.distance ?? 0}m`,
               wrap: true,
               spacing: 'small',
             },

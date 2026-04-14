@@ -243,7 +243,7 @@ export class RecommendationServiceImpl implements RecommendationService {
     const visits = visits90.get(restaurant.id) ?? 0;
     const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
 
-    if (preference.categories.has(restaurant.category)) return '요청 분야';
+    if (preference.categories.has(restaurant.category)) return '요청 조건 반영';
     if (preference.near && distance <= 150) return '가까운 곳';
     if (preference.far && distance >= 200) return '조금 먼 곳';
     if (preference.spicy && this.hasAny(tags, ['매운', '마라', '얼큰'])) return '매운 메뉴';
