@@ -202,27 +202,35 @@ export class RecommendationServiceImpl implements RecommendationService {
   }
 
   private parsePreference(query: string): QueryPreference {
-    const q = query.toLowerCase();
+    const normalizedQuery = query
+      .toLowerCase()
+      .replace(/[\/|]+/g, ',')
+      .replace(/\s*,\s*/g, ',');
+    const tokens = normalizedQuery
+      .split(',')
+      .map(token => token.trim())
+      .filter(Boolean);
+    const haystack = tokens.length > 0 ? tokens.join(' ') : normalizedQuery;
 
     const categories = new Set<RestaurantCategory>();
-    if (/한식/.test(q)) categories.add('한식');
-    if (/일식|초밥|스시|라멘|우동/.test(q)) categories.add('일식');
-    if (/중식|중국|짜장|짬뽕|마라|훠궈/.test(q)) categories.add('중식');
-    if (/양식|파스타|피자|돈까스/.test(q)) categories.add('양식');
-    if (/분식|김밥|떡볶이/.test(q)) categories.add('분식');
-    if (/기타|베트남|태국|쌀국수/.test(q)) categories.add('기타');
+    if (/한식/.test(haystack)) categories.add('한식');
+    if (/일식|초밥|스시|라멘|우동/.test(haystack)) categories.add('일식');
+    if (/중식|중국|짜장|짬뽕|마라|훠궈/.test(haystack)) categories.add('중식');
+    if (/양식|파스타|피자|돈까스/.test(haystack)) categories.add('양식');
+    if (/분식|김밥|떡볶이/.test(haystack)) categories.add('분식');
+    if (/기타|베트남|태국|쌀국수/.test(haystack)) categories.add('기타');
 
     return {
       hasQuery: query.length > 0,
-      near: /가깝|근처|도보|빨리|가까운/.test(q),
-      far: /멀|먼|드라이브|가볼/.test(q),
-      spicy: /매운|얼큰|맵/.test(q),
-      soup: /국물|탕|찌개|해장/.test(q),
-      noodle: /면|라멘|국수|우동|냉면|쌀국수/.test(q),
-      rice: /밥|덮밥|비빔밥|볶음밥|국밥/.test(q),
-      meat: /고기|육|돈까스|갈비|삼겹/.test(q),
-      coolFood: /시원|냉|차가운/.test(q),
-      warmFood: /뜨끈|따뜻|온기|해장/.test(q),
+      near: /가깝|근처|도보|빨리|가까운/.test(haystack),
+      far: /멀|먼|드라이브|가볼/.test(haystack),
+      spicy: /매운|얼큰|맵/.test(haystack),
+      soup: /국물|탕|찌개|해장/.test(haystack),
+      noodle: /면|라멘|국수|우동|냉면|쌀국수/.test(haystack),
+      rice: /밥|덮밥|비빔밥|볶음밥|국밥/.test(haystack),
+      meat: /고기|육|돈까스|갈비|삼겹/.test(haystack),
+      coolFood: /시원|냉|차가운/.test(haystack),
+      warmFood: /뜨끈|따뜻|온기|해장/.test(haystack),
       categories,
     };
   }
