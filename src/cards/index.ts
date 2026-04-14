@@ -319,11 +319,6 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
     }] : []),
     ...recommendations.map((r, i) => ({
       type: 'ColumnSet',
-      selectAction: {
-        type: 'Action.Execute',
-        verb: 'vote',
-        data: { restaurantName: r.name },
-      },
       columns: [
         {
           type: 'Column',
@@ -337,7 +332,7 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
             },
             {
               type: 'TextBlock',
-              text: r.reason,
+              text: `${r.reason} / ${r.category ?? ''} / ${r.distance ?? 0}m`,
               wrap: true,
               spacing: 'small',
             },
@@ -346,13 +341,20 @@ export function buildRecommendCard(recommendations: RecommendationResult[], user
         {
           type: 'Column',
           width: 'auto',
-          items: [{
-            type: 'TextBlock',
-            text: '▶ 투표',
-            horizontalAlignment: 'right',
-            color: 'accent',
-            weight: 'bolder',
-          }],
+          verticalContentAlignment: 'center',
+          items: [
+            {
+              type: 'ActionSet',
+              actions: [
+                {
+                  type: 'Action.Execute',
+                  verb: 'vote',
+                  title: '▶ 투표',
+                  data: { restaurantName: r.name },
+                },
+              ],
+            },
+          ],
         },
       ],
     })),

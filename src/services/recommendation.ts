@@ -7,7 +7,31 @@ import type {
   ReviewRepository,
   SelectedHistoryRepository,
   SettingRepository,
+  Restaurant,
+  RecommendationResult,
+  WeatherInfo,
+  RestaurantCategory,
 } from '../core/types.js';
+
+interface QueryPreference {
+  hasQuery: boolean;
+  near: boolean;
+  far: boolean;
+  spicy: boolean;
+  soup: boolean;
+  noodle: boolean;
+  rice: boolean;
+  meat: boolean;
+  coolFood: boolean;
+  warmFood: boolean;
+  categories: Set<RestaurantCategory>;
+}
+
+interface RankedCandidate {
+  restaurant: Restaurant;
+  score: number;
+  reason: string;
+}
 
 export class RecommendationServiceImpl implements RecommendationService {
   constructor(
@@ -20,299 +44,222 @@ export class RecommendationServiceImpl implements RecommendationService {
     private settingRepo: SettingRepository
   ) {}
 
-  async getRecommendations(userId: string, previousNames: string[] = [], userRequest?: string): Promise<import('../core/types.js').RecommendationResult[]> {
-    // Get current weather
+  async getRecommendations(
+    userId: string,
+    previousNames: string[] = [],
+    userRequest?: string
+  ): Promise<RecommendationResult[]> {
     const weather = await this.weatherService.getCurrent();
-    const previousNameSet = new Set(previousNames);
+    const query = (userRequest ?? '').trim();
+    const preference = this.parsePreference(query);
+    const previousSet = new Set(previousNames);
 
-    // Get all active restaurants
-    let allRestaurants = this.restaurantRepo.findAll();
-
-    // Filter by delivery mode if active
-    const deliveryModeActive = this.settingRepo.getDeliveryModeActive();
-    if (deliveryModeActive) {
-      allRestaurants = allRestaurants.filter(r => r.is_delivery);
+    let restaurants = this.restaurantRepo.findAll();
+    if (this.settingRepo.getDeliveryModeActive()) {
+      restaurants = restaurants.filter(r => r.is_delivery);
     }
 
-    // Get user's blacklist
-    const blacklisted = this.blacklistRepo.getUserBlacklist(userId);
-    const blacklistedNames = blacklisted.map(r => r.name);
+    const blacklisted = new Set(this.blacklistRepo.getUserBlacklist(userId).map(r => r.name));
+    const recent3 = new Set(
+      this.historyRepo
+        .findRecent(3)
+        .map(h => this.restaurantRepo.findById(h.restaurant_id)?.name)
+        .filter(Boolean) as string[]
+    );
 
-    // Get recently visited (last 3 days)
-    const recentHistory = this.historyRepo.findRecent(3);
-    const recentVisits = recentHistory
-      .map(h => this.restaurantRepo.findById(h.restaurant_id)?.name)
-      .filter(Boolean) as string[];
-
-    // Get top rated restaurants for logging/analysis (not for Ollama weighting)
-    const allReviews = allRestaurants.map(r => ({
-      name: r.name,
-      rating: this.reviewRepo.getAverageRating(r.id),
-    }))
-      .filter(r => r.rating > 0)
-      .sort((a, b) => b.rating - a.rating);
-
-    // Don't pass topRated to Ollama - let it decide independently
-    const topRated: string[] = [];
-
+    const visits90 = this.buildVisitCountMap(90);
     const budget = this.settingRepo.getBudget();
 
-    // 저평점 식당 필터링 (리뷰가 있는데 3.0 미만이면 제외)
-    const lowRatedIds = new Set(
-      allRestaurants
-        .map(r => ({ id: r.id, rating: this.reviewRepo.getAverageRating(r.id) }))
-        .filter(r => r.rating > 0 && r.rating < 3.0)
-        .map(r => r.id)
-    );
+    const available = restaurants.filter(r => !blacklisted.has(r.name));
+    if (available.length === 0) return [];
 
-    // Build available list (excluding blacklisted, recent, low-rated)
-    const availableRestaurants = allRestaurants.filter(r =>
-      !blacklistedNames.includes(r.name) &&
-      !recentVisits.includes(r.name) &&
-      !lowRatedIds.has(r.id)
-    );
-    const availableNames = new Set(availableRestaurants.map(r => r.name));
-
-    // 거리 정렬 방향 결정
-    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
-    const wantFar = /멀|먼\s*곳|먼\s*데|멀리/.test(userRequest ?? '');
-    const wantNear = /가깝|가까운|가까이|근처/.test(userRequest ?? '');
-
-    const shuffledAvailable = this.shuffleRestaurants(availableRestaurants);
-    let sortedForOllama = shuffledAvailable;
-    if (wantFar) {
-      sortedForOllama = [...shuffledAvailable].sort((a, b) => b.distance - a.distance);
-    } else if (wantNear || isRainy) {
-      sortedForOllama = [...shuffledAvailable].sort((a, b) => a.distance - b.distance);
-    }
-
-    const sortLabel = wantFar ? '먼거리순' : (wantNear || isRainy) ? '가까운순' : '기본';
-    console.log(`[Recommend] available=${availableRestaurants.length}개, blacklisted=${blacklistedNames.length}개, recent=${recentVisits.join(',')}, lowRated=${lowRatedIds.size}개, 정렬=${sortLabel}${userRequest ? `, 요청="${userRequest}"` : ''}`);
-
-    try {
-      const recommendations = await this.ollamaService.recommend({
+    const ranked = available.map(restaurant => {
+      const score = this.scoreRestaurant({
+        restaurant,
         weather,
-        recentVisits,
-        topRated,
-        blacklisted: blacklistedNames,
+        preference,
+        recent3,
+        visits90,
+        previousSet,
         budget,
-        availableRestaurants: sortedForOllama.map(r => ({
-          name: r.name,
-          category: r.category,
-          price: r.price,
-          distance: r.distance,
-          tags: r.tags,
-        })),
-        previousRecommendations: previousNames,
-        userRequest,
       });
-
-      // DB에 존재하는 식당만 필터링
-      const validRecommendations = recommendations.filter(r => availableNames.has(r.name));
-      console.log(`[Recommend] Ollama 결과=${recommendations.length}개, 유효=${validRecommendations.length}개, Ollama반환:${recommendations.map(r=>r.name).join(',')}`);
-
-      // If no valid recommendations, return fallback
-      if (validRecommendations.length === 0) {
-        console.log('[Recommend] → fallback 사용');
-        return this.getFallbackRecommendations(weather, availableRestaurants, previousNameSet);
-      }
-
-      // 후처리: 한국어 체크 + 카테고리/거리 보정 + 5개 보충
-      return this.postProcess(validRecommendations, availableRestaurants, weather, previousNameSet);
-    } catch (error) {
-      console.error('Recommendation error:', error);
-      return this.getFallbackRecommendations(weather, availableRestaurants, previousNameSet);
-    }
-  }
-
-  private postProcess(
-    recs: import('../core/types.js').RecommendationResult[],
-    available: import('../core/types.js').Restaurant[],
-    weather: import('../core/types.js').WeatherInfo,
-    previousNameSet: Set<string>
-  ): import('../core/types.js').RecommendationResult[] {
-    const restaurantMap = new Map(available.map(r => [r.name, r]));
-    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
-    const uniqueByName = new Set<string>();
-
-    // 1. LLM reason 정리 + 이름 중복 제거
-    const normalized = recs.flatMap(rec => {
-      const r = restaurantMap.get(rec.name);
-      if (!r || uniqueByName.has(rec.name)) return [];
-      uniqueByName.add(rec.name);
-
-      const hasKorean = /[가-힣]/.test(rec.reason);
-      const rawReason = hasKorean ? rec.reason.split('·')[0].trim() : this.buildWeatherKeyword(weather);
-      const keyword = rawReason || this.buildWeatherKeyword(weather);
-      // 항상 DB의 카테고리·거리 append
-      const reason = `${keyword} · ${r.category} · ${r.distance}m`;
-
-      return [{
-        ...rec,
-        reason,
-        category: r.category,
-        distance: r.distance,
-        price: r.price,
-      }];
+      const reason = this.buildReason(restaurant, weather, preference, recent3, visits90);
+      return { restaurant, score, reason };
     });
 
-    return this.expandToFive(normalized, available, weather, isRainy, previousNameSet);
+    ranked.sort((a, b) => b.score - a.score);
+    const selected = this.pickTopFive(ranked, preference);
+    const rotated = this.rotateIfSameFirst(selected, previousNames);
+
+    return rotated.map(item => ({
+      name: item.restaurant.name,
+      reason: item.reason,
+      category: item.restaurant.category,
+      distance: item.restaurant.distance,
+      price: item.restaurant.price,
+    }));
   }
 
-  private getFallbackRecommendations(
-    weather: import('../core/types.js').WeatherInfo,
-    restaurants: import('../core/types.js').Restaurant[],
-    previousNameSet: Set<string>
-  ): import('../core/types.js').RecommendationResult[] {
-    if (restaurants.length === 0) return [];
+  private buildVisitCountMap(days: number): Map<number, number> {
+    const map = new Map<number, number>();
+    for (const h of this.historyRepo.findRecent(days)) {
+      map.set(h.restaurant_id, (map.get(h.restaurant_id) ?? 0) + 1);
+    }
+    return map;
+  }
 
-    // Build category preference based on weather
+  private parsePreference(query: string): QueryPreference {
+    const q = query.toLowerCase();
+    const has = query.length > 0;
+
+    const categories = new Set<RestaurantCategory>();
+    if (/한식/.test(q)) categories.add('한식');
+    if (/일식|초밥|스시|라멘|우동/.test(q)) categories.add('일식');
+    if (/중식|중국|짜장|짬뽕|마라|훠궈/.test(q)) categories.add('중식');
+    if (/양식|파스타|피자|돈까스/.test(q)) categories.add('양식');
+    if (/분식|김밥|떡볶이/.test(q)) categories.add('분식');
+    if (/기타|베트남|태국|쌀국수/.test(q)) categories.add('기타');
+
+    return {
+      hasQuery: has,
+      near: /가깝|근처|도보|빨리|가까운/.test(q),
+      far: /멀|먼|드라이브|가볼/.test(q),
+      spicy: /매운|얼큰|맵/.test(q),
+      soup: /국물|탕|찌개|해장/.test(q),
+      noodle: /면|라멘|국수|우동|냉면|쌀국수/.test(q),
+      rice: /밥|덮밥|비빔밥|볶음밥|국밥/.test(q),
+      meat: /고기|육|돈까스|갈비|삼겹/.test(q),
+      coolFood: /시원|냉|차가운/.test(q),
+      warmFood: /뜨끈|따뜻|온기|해장/.test(q),
+      categories,
+    };
+  }
+
+  private scoreRestaurant(params: {
+    restaurant: Restaurant;
+    weather: WeatherInfo;
+    preference: QueryPreference;
+    recent3: Set<string>;
+    visits90: Map<number, number>;
+    previousSet: Set<string>;
+    budget: number;
+  }): number {
+    const { restaurant, weather, preference, recent3, visits90, previousSet, budget } = params;
+    const tags = (restaurant.tags ?? '').toLowerCase();
+    const rating = this.reviewRepo.getAverageRating(restaurant.id);
+    const visits = visits90.get(restaurant.id) ?? 0;
+    const distance = restaurant.distance ?? 0;
+
+    let score = 0;
+
+    // Random baseline so refresh without input changes naturally.
+    score += Math.random() * 1.2;
+
+    // Weather + distance
     const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
-    let categoryPreferences: string[] = [];
-    if (isRainy) {
-      categoryPreferences = ['분식', '한식', '일식'];
-    } else if (weather.temp < 10) {
-      categoryPreferences = ['한식', '국물', '분식'];
-    } else if (weather.temp > 25) {
-      categoryPreferences = ['일식', '냉면', '분식'];
-    } else {
-      categoryPreferences = ['일식', '한식', '중식'];
+    if (isRainy) score += Math.max(0, 2.8 - distance / 120);
+    if (weather.temp < 10) score += this.hasAny(tags, ['국물', '탕', '찌개', '라멘', '국밥']) ? 1.7 : 0;
+    if (weather.temp > 25) score += this.hasAny(tags, ['냉', '면', '쌀국수', '시원']) ? 1.5 : 0;
+
+    // Quality / history
+    score += rating * 0.65;
+    score -= visits * 0.3;
+    if (recent3.has(restaurant.name)) score -= 1.8;
+    if (previousSet.has(restaurant.name)) score -= 1.1;
+    if (restaurant.price > budget) score -= 0.8;
+
+    // Distance preference
+    if (preference.near) score += Math.max(0, 2.4 - distance / 130);
+    if (preference.far) score += Math.min(2.2, distance / 220);
+
+    // Category preference
+    if (preference.categories.size > 0 && preference.categories.has(restaurant.category)) {
+      score += 3.0;
     }
 
-    // 비/눈 오는 날은 가까운 순, 그 외에는 랜덤
-    const ordered = isRainy
-      ? this.shuffleRestaurants(restaurants).sort((a, b) => a.distance - b.distance)
-      : this.shuffleRestaurants(restaurants);
+    // Query semantic preference from tags
+    if (preference.spicy && this.hasAny(tags, ['매운', '마라', '얼큰'])) score += 1.8;
+    if (preference.soup && this.hasAny(tags, ['국물', '탕', '찌개', '국밥'])) score += 1.8;
+    if (preference.noodle && this.hasAny(tags, ['면', '라멘', '국수', '냉면', '쌀국수'])) score += 1.6;
+    if (preference.rice && this.hasAny(tags, ['밥', '덮밥', '비빔밥', '볶음밥', '국밥'])) score += 1.4;
+    if (preference.meat && this.hasAny(tags, ['고기', '갈비', '불고기', '삼겹', '돈까스'])) score += 1.4;
+    if (preference.coolFood && this.hasAny(tags, ['냉', '시원', '냉면'])) score += 1.4;
+    if (preference.warmFood && this.hasAny(tags, ['국물', '탕', '찌개', '해장'])) score += 1.4;
 
-    const preferred = categoryPreferences.flatMap(category => {
-      const picked = ordered.find(r => r.category === category && !previousNameSet.has(r.name))
-        ?? ordered.find(r => r.category === category);
-      if (!picked) return [];
-      return [{
-        name: picked.name,
-        reason: this.buildFallbackReason(weather, picked, category),
-        category: picked.category,
-        distance: picked.distance,
-        price: picked.price,
-      }];
-    });
-
-    return this.expandToFive(preferred, ordered, weather, isRainy, previousNameSet);
+    return score;
   }
 
-  private expandToFive(
-    seeds: import('../core/types.js').RecommendationResult[],
-    available: import('../core/types.js').Restaurant[],
-    weather: import('../core/types.js').WeatherInfo,
-    isRainy: boolean,
-    previousNameSet: Set<string>
-  ): import('../core/types.js').RecommendationResult[] {
-    const restaurantMap = new Map(available.map(r => [r.name, r]));
-    const selected: import('../core/types.js').RecommendationResult[] = [];
+  private pickTopFive(ranked: RankedCandidate[], preference: QueryPreference): RankedCandidate[] {
+    const selected: RankedCandidate[] = [];
     const usedNames = new Set<string>();
     const usedCategories = new Set<string>();
-    const freshSeeds: import('../core/types.js').RecommendationResult[] = [];
-    const repeatedSeeds: import('../core/types.js').RecommendationResult[] = [];
+    const preferCategoryDiversity = !preference.hasQuery || preference.categories.size === 0;
 
-    for (const rec of seeds) {
-      const restaurant = restaurantMap.get(rec.name);
-      if (!restaurant || usedNames.has(rec.name)) continue;
-
-      const normalized = {
-        ...rec,
-        category: restaurant.category,
-        distance: restaurant.distance,
-        price: restaurant.price,
-        reason: rec.reason || this.buildFallbackReason(weather, restaurant, restaurant.category),
-      };
-
-      if (previousNameSet.has(rec.name)) {
-        repeatedSeeds.push(normalized);
-      } else {
-        freshSeeds.push(normalized);
-      }
-    }
-
-    for (const bucket of [freshSeeds, repeatedSeeds]) {
-      for (const rec of bucket) {
+    // 1st pass: diversity-first
+    if (preferCategoryDiversity) {
+      for (const item of ranked) {
         if (selected.length >= 5) break;
-        if (usedNames.has(rec.name)) continue;
-        if (!usedCategories.has(rec.category ?? '')) {
-          selected.push(rec);
-          usedNames.add(rec.name);
-          if (rec.category) usedCategories.add(rec.category);
-        }
+        if (usedNames.has(item.restaurant.name)) continue;
+        if (usedCategories.has(item.restaurant.category)) continue;
+        selected.push(item);
+        usedNames.add(item.restaurant.name);
+        usedCategories.add(item.restaurant.category);
       }
     }
 
-    for (const bucket of [freshSeeds, repeatedSeeds]) {
-      for (const rec of bucket) {
-        if (selected.length >= 5) break;
-        if (usedNames.has(rec.name)) continue;
-        selected.push(rec);
-        usedNames.add(rec.name);
-        if (rec.category) usedCategories.add(rec.category);
-      }
-    }
-
-    const remaining = isRainy
-      ? this.shuffleRestaurants(available).sort((a, b) => a.distance - b.distance)
-      : this.shuffleRestaurants(available);
-
-    for (const preferUnusedCategory of [true, false]) {
-      for (const preferFresh of [true, false]) {
-        for (const restaurant of remaining) {
-          if (selected.length >= 5) break;
-          if (usedNames.has(restaurant.name)) continue;
-          if (preferUnusedCategory && usedCategories.has(restaurant.category)) continue;
-          if (preferFresh && previousNameSet.has(restaurant.name)) continue;
-
-          selected.push({
-            name: restaurant.name,
-            reason: this.buildFallbackReason(weather, restaurant, restaurant.category),
-            category: restaurant.category,
-            distance: restaurant.distance,
-            price: restaurant.price,
-          });
-          usedNames.add(restaurant.name);
-          usedCategories.add(restaurant.category);
-        }
-      }
+    // 2nd pass: fill remaining by score order
+    for (const item of ranked) {
+      if (selected.length >= 5) break;
+      if (usedNames.has(item.restaurant.name)) continue;
+      selected.push(item);
+      usedNames.add(item.restaurant.name);
     }
 
     return selected.slice(0, 5);
   }
 
-  private shuffleRestaurants<T>(items: T[]): T[] {
-    const shuffled = [...items];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  private rotateIfSameFirst(items: RankedCandidate[], previousNames: string[]): RankedCandidate[] {
+    if (items.length < 2 || previousNames.length === 0) return items;
+    if (items[0].restaurant.name !== previousNames[0]) return items;
+
+    const nextIndex = items.findIndex((item, idx) => idx > 0 && item.restaurant.name !== items[0].restaurant.name);
+    if (nextIndex > 0) {
+      const swapped = [...items];
+      [swapped[0], swapped[nextIndex]] = [swapped[nextIndex], swapped[0]];
+      return swapped;
     }
-    return shuffled;
+    return items;
   }
 
-  private buildWeatherKeyword(weather: import('../core/types.js').WeatherInfo): string {
-    if (weather.condition === 'rain') return '비오는날';
-    if (weather.condition === 'snow') return '눈오는날';
-    if (weather.temp < 10) return '추운날';
-    if (weather.temp > 25) return '더운날';
-    return '오늘추천';
-  }
-
-  private buildFallbackReason(
-    weather: import('../core/types.js').WeatherInfo,
-    restaurant: import('../core/types.js').Restaurant,
-    _category: string
+  private buildReason(
+    restaurant: Restaurant,
+    weather: WeatherInfo,
+    preference: QueryPreference,
+    recent3: Set<string>,
+    visits90: Map<number, number>
   ): string {
-    const weatherReason = (() => {
-      if (weather.condition === 'rain') return `비가 오니 가까운 거리 추천`;
-      if (weather.condition === 'snow') return `눈이 오니 가까운 거리 추천`;
-      if (weather.temp < 10) return '추운 날 따뜻한 메뉴';
-      if (weather.temp > 25) return '더운 날 시원한 메뉴';
-      return '오늘 날씨에 어울리는';
-    })();
+    const tags = (restaurant.tags ?? '').toLowerCase();
+    const distance = restaurant.distance ?? 0;
+    const visits = visits90.get(restaurant.id) ?? 0;
+    const isRainy = weather.condition === 'rain' || weather.condition === 'snow';
 
-    return `${weatherReason} · ${restaurant.category} · ${restaurant.distance}m`;
+    if (preference.categories.has(restaurant.category)) return '요청 분야';
+    if (preference.near && distance <= 150) return '가까운 곳';
+    if (preference.far && distance >= 200) return '조금 먼 곳';
+    if (preference.spicy && this.hasAny(tags, ['매운', '마라', '얼큰'])) return '매운 메뉴';
+    if (preference.soup && this.hasAny(tags, ['국물', '탕', '찌개', '국밥'])) return '국물 메뉴';
+    if (preference.noodle && this.hasAny(tags, ['면', '라멘', '국수', '냉면'])) return '면 요리';
+    if (preference.rice && this.hasAny(tags, ['밥', '덮밥', '비빔밥', '볶음밥'])) return '밥 메뉴';
+    if (preference.meat && this.hasAny(tags, ['고기', '갈비', '불고기', '삼겹'])) return '고기 메뉴';
+    if (isRainy && distance <= 120) return '비/눈 대비';
+    if (weather.temp > 25 && this.hasAny(tags, ['냉', '시원', '면'])) return '더운 날씨';
+    if (weather.temp < 10 && this.hasAny(tags, ['국물', '탕', '찌개'])) return '추운 날씨';
+    if (recent3.has(restaurant.name)) return '최근 방문';
+    if (visits <= 1) return '최근 덜 간 곳';
+    return '오늘 추천';
+  }
+
+  private hasAny(tags: string, needles: string[]): boolean {
+    return needles.some(n => tags.includes(n));
   }
 }
