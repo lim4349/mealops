@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import { CloudAdapter, ConfigurationBotFrameworkAuthentication, MessageFactory } from 'botbuilder';
+import { appendFileSync } from 'fs';
+import { inspect } from 'util';
 import { CommandHandler } from './handlers/command.js';
 import { getDatabase } from './db/index.js';
 import {
@@ -20,6 +22,37 @@ import { FavoriteServiceImpl } from './services/favorite.js';
 import { SchedulerImpl } from './scheduler/index.js';
 import { MeaLOpsBot, conversationReferences } from './bot/index.js';
 import type { Dependencies } from './core/types.js';
+
+const logFile = process.env.MEALOPS_LOG_FILE ?? '/tmp/server.log';
+if (logFile && logFile.toLowerCase() !== 'off') {
+  const originalLog = console.log.bind(console);
+  const originalError = console.error.bind(console);
+  const originalWarn = console.warn.bind(console);
+  const writeLog = (level: string, args: unknown[]): void => {
+    const message = args.map(arg => {
+      if (typeof arg === 'string') return arg;
+      if (arg instanceof Error) return arg.stack ?? arg.message;
+      return inspect(arg, { depth: 6, colors: false, breakLength: 120 });
+    }).join(' ');
+    try {
+      appendFileSync(logFile, `${new Date().toISOString()} ${level} ${message}\n`);
+    } catch {
+      // Keep the bot alive even if file logging is unavailable.
+    }
+  };
+  console.log = (...args: unknown[]) => {
+    writeLog('INFO', args);
+    originalLog(...args);
+  };
+  console.warn = (...args: unknown[]) => {
+    writeLog('WARN', args);
+    originalWarn(...args);
+  };
+  console.error = (...args: unknown[]) => {
+    writeLog('ERROR', args);
+    originalError(...args);
+  };
+}
 
 // Initialize database
 const db = getDatabase(process.env.DB_PATH);
@@ -72,9 +105,12 @@ const favoriteService = new FavoriteServiceImpl(
 );
 
 // CloudAdapter authentication
+const microsoftAppTenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
 const auth = new ConfigurationBotFrameworkAuthentication({
   MicrosoftAppId: process.env.MICROSOFT_APP_ID ?? '',
   MicrosoftAppPassword: process.env.MICROSOFT_APP_PASSWORD ?? '',
+  MicrosoftAppType: process.env.MICROSOFT_APP_TYPE ?? (microsoftAppTenantId ? 'SingleTenant' : 'MultiTenant'),
+  MicrosoftAppTenantId: microsoftAppTenantId,
 });
 
 const adapter = new CloudAdapter(auth);
@@ -99,13 +135,45 @@ async function sendNotification(message: string, card?: any): Promise<void> {
   const groupChatId = process.env.TEAMS_CHANNEL_ID;
   const appId = process.env.MICROSOFT_APP_ID ?? '';
   const tenantId = process.env.MICROSOFT_APP_TENANT_ID ?? '';
+  const serviceUrl = process.env.TEAMS_SERVICE_URL ?? 'https://smba.trafficmanager.net/teams/';
 
-  // If group chat ID is set, send to group chat directly
-  if (groupChatId) {
+  const sendToReference = async (reference: any, label: string): Promise<boolean> => {
     try {
+      await (adapter as any).continueConversationAsync(
+        appId,
+        reference,
+        async (context: any) => {
+          if (message) {
+            await context.sendActivity(MessageFactory.text(message));
+          }
+          if (card) {
+            await context.sendActivity(MessageFactory.attachment(card));
+          }
+        }
+      );
+      console.log(`✅ Notification sent to ${label}`);
+      return true;
+    } catch (error) {
+      console.error(`Error sending to ${label}:`, error);
+      return false;
+    }
+  };
+
+  const references = Array.from(conversationReferences.values());
+  const targetReference = groupChatId
+    ? references.find(reference => reference.conversation?.id === groupChatId)
+    : undefined;
+
+  // Prefer the real conversation reference captured from Teams; it has the correct serviceUrl.
+  if (groupChatId) {
+    const sentViaStoredReference = targetReference
+      ? await sendToReference(targetReference, `stored group chat (${groupChatId})`)
+      : false;
+
+    if (!sentViaStoredReference) {
       const groupChatRef = {
         channelId: 'msteams',
-        serviceUrl: 'https://smba.trafficmanager.net/teams/',
+        serviceUrl,
         conversation: {
           id: groupChatId,
           isGroup: true,
@@ -119,35 +187,15 @@ async function sendNotification(message: string, card?: any): Promise<void> {
         },
       };
 
-      await (adapter as any).continueConversationAsync(
-        appId,
-        groupChatRef,
-        async (context: any) => {
-          // 메시지 먼저 전송
-          await context.sendActivity(MessageFactory.text(message));
-          // 카드가 있으면 카드도 전송
-          if (card) {
-            await context.sendActivity(MessageFactory.attachment(card));
-          }
-        }
-      );
-      console.log('✅ Notification sent to group chat');
-    } catch (error) {
-      console.error('Error sending to group chat:', error);
+      await sendToReference(groupChatRef, `configured group chat (${groupChatId})`);
     }
   }
 
   // Also send to all stored conversation references (other chats)
-  for (const [, reference] of conversationReferences) {
+  for (const reference of references) {
     // Skip if already sent to this group chat via groupChatId
     if (groupChatId && reference.conversation?.id === groupChatId) continue;
-    try {
-      await (adapter as any).continueConversation(reference, async (context: any) => {
-        await context.sendActivity(card ? MessageFactory.attachment(card) : message);
-      });
-    } catch (error) {
-      console.error('Error sending to other chat:', error);
-    }
+    await sendToReference(reference, `stored chat (${reference.conversation?.id ?? 'unknown'})`);
   }
 }
 
@@ -191,7 +239,8 @@ const bot = new MeaLOpsBot(dependencies);
 const app = express();
 app.use(express.json());
 
-const port = process.env.PORT ?? 3978;
+const port = Number(process.env.PORT ?? 3978);
+const host = process.env.HOST ?? '0.0.0.0';
 
 // Health check
 app.get('/health', (req, res) => {
@@ -241,18 +290,18 @@ app.post('/test', async (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
-  console.log(`🍽️ MeaLOps server running on port ${port}`);
+const server = app.listen(port, host, () => {
+  console.log(`🍽️ MeaLOps server running on ${host}:${port}`);
 
   // Start scheduler
   scheduler.start();
 
-  // Check Ollama connection + warmup + 태그 자동 생성
+  // Check LLM connection + warmup + 태그 자동 생성
   ollamaService.checkConnection().then(async connected => {
     if (connected) {
-      console.log('✅ Ollama connected');
+      console.log(`✅ LLM connected (${process.env.OLLAMA_URL ?? 'http://localhost:11434'})`);
       await ollamaService.warmup();
-      console.log('✅ Ollama warmup complete');
+      console.log('✅ LLM warmup complete');
 
       // 태그 없는 기존 식당 자동 태그 생성 (백그라운드)
       const untagged = restaurantRepo.findAll(false).filter(r => !r.tags);
@@ -267,9 +316,14 @@ app.listen(port, () => {
         })();
       }
     } else {
-      console.log('⚠️ Ollama not available, using fallback recommendations');
+      console.log('⚠️ LLM not available, using fallback recommendations');
     }
   });
+});
+
+server.on('error', (error) => {
+  console.error('HTTP server error:', error);
+  process.exit(1);
 });
 
 // Graceful shutdown

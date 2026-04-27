@@ -83,21 +83,20 @@ export class MeaLOpsBot extends ActivityHandler {
       await next();
     });
 
-    this.onEvent(async (context: TurnContext, next: () => Promise<void>) => {
+    this.onConversationUpdate(async (context: TurnContext, next: () => Promise<void>) => {
       // 봇이 채널/대화에 추가될 때 conversation reference 저장
       await this.saveConversationReference(context);
 
-      if (context.activity.type === 'conversationUpdateActivity' && context.activity.membersAdded) {
-        for (const member of context.activity.membersAdded) {
-          if (member.id !== context.activity.recipient?.id) {
-            await context.sendActivity('**🍽️ MeaLOps에 오신 것을 환영합니다!**\n\n점심 메뉴 고르기가 이제 즐거워집니다!');
-            try {
-              const weather = await this.deps.weatherService.getCurrent();
-              await context.sendActivity(MessageFactory.attachment(buildMainMenuCard(weather)));
-            } catch {
-              await context.sendActivity(MessageFactory.attachment(buildMainMenuCard()));
-            }
-          }
+      const botWasAdded = context.activity.membersAdded?.some(
+        member => member.id === context.activity.recipient?.id
+      );
+      if (botWasAdded) {
+        await context.sendActivity('**🍽️ MeaLOps에 오신 것을 환영합니다!**\n\n점심 메뉴 고르기가 이제 즐거워집니다!');
+        try {
+          const weather = await this.deps.weatherService.getCurrent();
+          await context.sendActivity(MessageFactory.attachment(buildMainMenuCard(weather)));
+        } catch {
+          await context.sendActivity(MessageFactory.attachment(buildMainMenuCard()));
         }
       }
       await next();
@@ -106,15 +105,17 @@ export class MeaLOpsBot extends ActivityHandler {
 
   private async saveConversationReference(context: TurnContext): Promise<void> {
     const conversationRef = TurnContext.getConversationReference(context.activity);
-    const userId = context.activity.from?.id ?? 'unknown';
-    conversationReferences.set(userId, conversationRef);
+    const conversationId = context.activity.conversation?.id ?? context.activity.from?.id ?? 'unknown';
+    conversationReferences.set(conversationId, conversationRef);
   }
 
   async handleCardAction(
     context: TurnContext,
     invokeValue: any
   ): Promise<AdaptiveCardInvokeResponse> {
-    const { verb, data } = invokeValue.action;
+    const action = invokeValue?.action;
+    const verb = action?.verb;
+    const data = action?.data ?? {};
     const userId = context.activity.from?.id ?? 'unknown';
     const userName = context.activity.from?.name ?? '익명';
     const today = formatKstDate();
@@ -125,6 +126,10 @@ export class MeaLOpsBot extends ActivityHandler {
     }
 
     try {
+      if (!verb) {
+        return this.cardResponse(buildResponseCard('알 수 없는 카드 요청입니다. 다시 시도해주세요.', true));
+      }
+
       switch (verb) {
         case 'main_menu': {
           try {

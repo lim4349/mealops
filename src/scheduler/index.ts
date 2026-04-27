@@ -41,6 +41,7 @@ export class SchedulerImpl implements Scheduler {
   private lastVoteKey = '';
   private lastDecisionKey = '';
   private lastReviewKey = '';
+  private isTickRunning = false;
 
   start(): void {
     const voteHour = process.env.VOTE_HOUR ?? '11';
@@ -58,47 +59,56 @@ export class SchedulerImpl implements Scheduler {
     // 매초 확인 (KST 기준)
     let debugCount = 0;
     this.intervalHandle = setInterval(async () => {
-      const now = new Date();
-      const today = formatKstDate(now);
-      const hm = formatKstTime(now);
-      const weekday = getKstWeekday(now);
+      if (this.isTickRunning) return;
+      this.isTickRunning = true;
 
-      // 디버그: 10초마다 출력
-      debugCount++;
-      if (debugCount % 10 === 0) {
-        console.log(`[DEBUG] 현재: ${today} ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteKey}`);
-      }
+      try {
+        const now = new Date();
+        const today = formatKstDate(now);
+        const hm = formatKstTime(now);
+        const weekday = getKstWeekday(now);
 
-      const voteKey = `${today}|vote|${hm}`;
-      const decisionKey = `${today}|decision|${hm}`;
-      const reviewKey = `${today}|review|${hm}`;
-      const isWeekday = weekday >= 1 && weekday <= 5;
-      const isHoliday = this.isHoliday(now);
-
-      // 투표 알림 (평일만, KST 기준)
-      if (hm === `${voteHour}:${voteMinute}` && this.lastVoteKey !== voteKey && isWeekday) {
-        this.lastVoteKey = voteKey;
-        console.log(`[VOTE] 스케줄 실행: ${voteHour}:${voteMinute}`);
-        if (!isHoliday) {
-          await this.sendVoteReminder();
+        // 디버그: 10초마다 출력
+        debugCount++;
+        if (debugCount % 10 === 0) {
+          console.log(`[DEBUG] 현재: ${today} ${hm}, VOTE: ${voteHour}:${voteMinute}, lastVote: ${this.lastVoteKey}`);
         }
-      }
 
-      // 강제 결정 (평일만, KST 기준)
-      if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionKey !== decisionKey && isWeekday) {
-        this.lastDecisionKey = decisionKey;
-        console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
-        if (!isHoliday && this.settingRepo.getForceDecisionEnabled()) {
-          await this.makeForceDecision();
-        }
-      }
+        const voteKey = `${today}|vote|${hm}`;
+        const decisionKey = `${today}|decision|${hm}`;
+        const reviewKey = `${today}|review|${hm}`;
+        const isWeekday = weekday >= 1 && weekday <= 5;
+        const isHoliday = this.isHoliday(now);
 
-      if (hm === `${reviewHour}:${reviewMinute}` && this.lastReviewKey !== reviewKey && isWeekday) {
-        this.lastReviewKey = reviewKey;
-        console.log(`[REVIEW] 스케줄 실행: ${reviewHour}:${reviewMinute}`);
-        if (!isHoliday) {
-          await this.sendReviewReminder();
+        // 투표 알림 (평일만, KST 기준)
+        if (hm === `${voteHour}:${voteMinute}` && this.lastVoteKey !== voteKey && isWeekday) {
+          this.lastVoteKey = voteKey;
+          console.log(`[VOTE] 스케줄 실행: ${voteHour}:${voteMinute}`);
+          if (!isHoliday) {
+            await this.sendVoteReminder();
+          }
         }
+
+        // 강제 결정 (평일만, KST 기준)
+        if (hm === `${voteHour}:${forceMinute}` && this.lastDecisionKey !== decisionKey && isWeekday) {
+          this.lastDecisionKey = decisionKey;
+          console.log(`[FORCE] 스케줄 실행: ${voteHour}:${forceMinute}`);
+          if (!isHoliday && this.settingRepo.getForceDecisionEnabled()) {
+            await this.makeForceDecision();
+          }
+        }
+
+        if (hm === `${reviewHour}:${reviewMinute}` && this.lastReviewKey !== reviewKey && isWeekday) {
+          this.lastReviewKey = reviewKey;
+          console.log(`[REVIEW] 스케줄 실행: ${reviewHour}:${reviewMinute}`);
+          if (!isHoliday) {
+            await this.sendReviewReminder();
+          }
+        }
+      } catch (error) {
+        console.error('[Scheduler] tick failed:', error);
+      } finally {
+        this.isTickRunning = false;
       }
     }, 1000); // 1초마다 확인
 

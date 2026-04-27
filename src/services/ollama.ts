@@ -6,30 +6,50 @@ export class OllamaServiceImpl implements OllamaService {
   private readonly model: string;
 
   constructor(baseUrl: string = 'http://localhost:11434', model: string = 'gemma3:12b') {
-    this.baseUrl = baseUrl;
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.model = model;
   }
 
-  async recommend(context: RecommendationContext): Promise<RecommendationResult[]> {
+  private async chat(prompt: string, temperature: number = 1.0, maxTokens: number = 500, timeout: number = 120000): Promise<string> {
     try {
-      const prompt = this.buildPrompt(context);
-
       const response = await axios.post(`${this.baseUrl}/api/generate`, {
         model: this.model,
         prompt,
         stream: false,
         options: {
-          temperature: 1.0,
-          num_predict: 500,
+          temperature,
+          num_predict: maxTokens,
         },
-      }, { timeout: 120000 });
+      }, { timeout });
+      return response.data.response;
+    } catch (nativeError) {
+      if (!this.isConnectionError(nativeError)) {
+        throw nativeError;
+      }
+    }
 
-      const raw = response.data.response;
-      console.log(`[Ollama] 응답 원문: ${raw.slice(0, 300)}`);
+    const response = await axios.post(`${this.baseUrl}/v1/chat/completions`, {
+      model: this.model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature,
+      max_tokens: maxTokens,
+    }, { timeout });
+    return response.data.choices[0].message.content;
+  }
+
+  private isConnectionError(error: unknown): boolean {
+    if (!axios.isAxiosError(error)) return false;
+    return !error.response || error.response.status === 404;
+  }
+
+  async recommend(context: RecommendationContext): Promise<RecommendationResult[]> {
+    try {
+      const prompt = this.buildPrompt(context);
+      const raw = await this.chat(prompt, 1.0, 500, 120000);
+      console.log(`[LLM] 응답 원문: ${raw.slice(0, 300)}`);
       return this.parseResponse(raw);
     } catch (error) {
-      console.error('Ollama error:', error);
-      // Fallback to simple recommendations
+      console.error('LLM error:', error);
       return this.getFallbackRecommendations(context);
     }
   }
@@ -104,7 +124,7 @@ ${context.userRequest ? '5' : '4'}. JSON 배열만 출력, 다른 텍스트 금�
         }));
       }
     } catch (e) {
-      console.error('Failed to parse Ollama response:', e);
+      console.error('Failed to parse LLM response:', e);
     }
     return [];
   }
@@ -134,23 +154,19 @@ ${context.userRequest ? '5' : '4'}. JSON 배열만 출력, 다른 텍스트 금�
 
   async generateTags(name: string, category: string): Promise<string> {
     try {
-      const response = await axios.post(`${this.baseUrl}/api/generate`, {
-        model: this.model,
-        prompt: `식당 이름: "${name}" (카테고리: ${category})
+      const raw = await this.chat(
+        `식당 이름: "${name}" (카테고리: ${category})
 이 식당의 음식 특징을 한국어 태그로 추정하세요.
 규칙:
 1. 쉼표로 구분된 태그만 출력 (다른 텍스트 금지)
 2. 3~6개 태그
 3. 예시 태그: 매운맛,국물,고기,해산물,채식,달콤,담백,볶음,튀김,면류,밥류,빠름,혼밥가능 (가격 관련 태그 금지)
 4. 출력 예시: 매운맛,국물,고기,밥류`,
-        stream: false,
-        options: { temperature: 0.3, num_predict: 50 },
-      }, { timeout: 30000 });
-
-      const raw = (response.data.response as string).trim();
-      // 쉼표로 구분된 태그만 추출 (한글/쉼표 외 제거)
-      const tags = raw.replace(/[^가-힣a-zA-Z0-9,]/g, '').split(',').filter(t => t.length > 0).slice(0, 6).join(',');
-      console.log(`[Ollama] 태그 생성: ${name} → ${tags}`);
+        0.3, 50, 30000
+      );
+      const trimmed = raw.trim();
+      const tags = trimmed.replace(/[^가-힣a-zA-Z0-9,]/g, '').split(',').filter(t => t.length > 0).slice(0, 6).join(',');
+      console.log(`[LLM] 태그 생성: ${name} → ${tags}`);
       return tags;
     } catch {
       return '';
@@ -159,12 +175,7 @@ ${context.userRequest ? '5' : '4'}. JSON 배열만 출력, 다른 텍스트 금�
 
   async warmup(): Promise<void> {
     try {
-      await axios.post(`${this.baseUrl}/api/generate`, {
-        model: this.model,
-        prompt: '안녕',
-        stream: false,
-        options: { num_predict: 1 },
-      }, { timeout: 120000 });
+      await this.chat('안녕', 0.3, 1, 120000);
     } catch {
       // warmup 실패해도 무시
     }
@@ -175,7 +186,12 @@ ${context.userRequest ? '5' : '4'}. JSON 배열만 출력, 다른 텍스트 금�
       await axios.get(`${this.baseUrl}/api/tags`, { timeout: 2000 });
       return true;
     } catch {
-      return false;
+      try {
+        await axios.get(`${this.baseUrl}/v1/models`, { timeout: 2000 });
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 }
